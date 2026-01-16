@@ -256,9 +256,17 @@ var doLogout = function()
     let controller;
     let dropButton; // UI button for dropping objects
 
+    let debugMode = false; // Toggle with query param ?debug=1
+
     init();
     setupFurnitureSelection();
     animate();
+
+    // Check for debug mode
+    if (new URLSearchParams(window.location.search).get('debug') === '1') {
+        debugMode = true;
+        console.log('🔧 Debug mode enabled');
+    }
 
     function init() {
         let myCanvas = document.getElementById("canvas");
@@ -537,14 +545,45 @@ var doLogout = function()
             const session = renderer.xr.getSession();
 
             if (hitTestSourceRequested === false) {
-                session.requestReferenceSpace("viewer").then(function (referenceSpace) {
-                    session
-                        .requestHitTestSource({ space: referenceSpace })
-                        .then(function (source) {
-                            hitTestSource = source;
+            const setupHitTest = async () => {
+                try {
+                    // Try "viewer" space first (standard for mobile AR)
+                    let refSpace = await session.requestReferenceSpace("viewer");
+                    
+                    // Try standard hit test with plane detection
+                    try {
+                        hitTestSource = await session.requestHitTestSource({ 
+                            space: refSpace,
+                            entityTypes: ["plane"],
+                            offsetRay: new XRRay({y: 0.5})
                         });
-                });
+                        console.log('✓ Hit test source created with plane detection');
+                    } catch (e) {
+                        console.warn('Plane hit test failed, trying basic hit test:', e);
+                        // Fallback: try without entityTypes
+                        try {
+                            hitTestSource = await session.requestHitTestSource({ 
+                                space: refSpace
+                            });
+                            console.log('✓ Hit test source created (basic)');
+                        } catch (e2) {
+                            console.error('Basic hit test also failed:', e2);
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to set up hit test:', e);
+                    // Last resort: try "local" reference space
+                    try {
+                        let refSpace = await session.requestReferenceSpace("local");
+                        hitTestSource = await session.requestHitTestSource({ space: refSpace });
+                        console.log('✓ Hit test source created with local reference space');
+                    } catch (e3) {
+                        console.error('All hit test attempts failed:', e3);
+                    }
+                }
+            };
 
+            setupHitTest();
                 session.addEventListener("end", onSessionEnded);
 
                 // Show drop button when AR session starts
@@ -557,6 +596,10 @@ var doLogout = function()
 
             if (hitTestSource) {
                 const hitTestResults = frame.getHitTestResults(hitTestSource);
+
+                if (debugMode && frame.getCounter && frame.getCounter() % 30 === 0) {
+                    console.log(`Hit test results: ${hitTestResults.length}`);
+                }
 
                 if (hitTestResults.length) {
                     const hit = hitTestResults[0];
@@ -585,6 +628,14 @@ var doLogout = function()
                     if (dropButton) {
                         dropButton.disabled = true;
                     }
+                }
+            } else {
+                if (debugMode && frame && frame.getCounter && frame.getCounter() === 0) {
+                    console.warn('⚠️ Hit test source not available - try ?debug=1 for more info');
+                }
+                reticle.visible = false;
+                if (dropButton) {
+                    dropButton.disabled = true;
                 }
             }
         }
