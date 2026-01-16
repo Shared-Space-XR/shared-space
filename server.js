@@ -5,23 +5,29 @@ var fs = require('fs');
 	//var dbURL = 'mongodb://44.246.204.171:27017/test';
 	var dbURL = 'mongodb://127.0.0.1:27017/test';
 var path = require('path'),
-  express = require('express'),
-  db = require('mongoskin').db(dbURL);
+  express = require('express');
 
+var { MongoClient } = require('mongodb');
+const mongoClient = new MongoClient(dbURL);
+let db;
 
 var mongoose = require('mongoose');
-mongoose.connect(dbURL); // connect to our database
+mongoose.connect(dbURL, { useNewUrlParser: true, useUnifiedTopology: true }); // connect to our database
 
 var app = express();
 var secret = 'test' + new Date().getTime().toString()
 
 var session = require('express-session');
 app.use(require("cookie-parser")(secret));
-var MongoStore = require('connect-mongo')(session);
-app.use(session( {store: new MongoStore({
-   url: dbURL,
-   secret: secret
-})}));
+var MongoStore = require('connect-mongo');
+app.use(session({
+   store: new MongoStore({
+      mongoUrl: dbURL
+   }),
+   secret: secret,
+   resave: false,
+   saveUninitialized: false
+}));
 app.use(passport.initialize());
 app.use(passport.session());
 var flash = require('express-flash');
@@ -37,6 +43,12 @@ app.use(bodyParser.urlencoded({     // to support URL-encoded bodies
 }));
 require('./passport/config/passport')(passport); // pass passport for configuration
 require('./passport/routes.js')(app, passport); // load our routes and pass in our app and fully configured passport
+
+// Connect to MongoDB
+mongoClient.connect().then(() => {
+  db = mongoClient.db('test');
+  console.log('Connected to MongoDB');
+}).catch(err => console.error('MongoDB connection error:', err));
 
 
 app.get("/api/dropObject"/*, isLoggedIn*/, function(req,res){

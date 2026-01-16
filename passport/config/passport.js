@@ -18,10 +18,13 @@ module.exports = function(passport) {
     });
 
     // used to deserialize the user
-    passport.deserializeUser(function(id, done) {
-        User.findById(id, function(err, user) {
-            done(err, user);
-        });
+    passport.deserializeUser(async function(id, done) {
+        try {
+            const user = await User.findById(id);
+            done(null, user);
+        } catch (err) {
+            done(err);
+        }
     });
 
     // =========================================================================
@@ -33,18 +36,15 @@ module.exports = function(passport) {
         passwordField : 'password',
         passReqToCallback : true // allows us to pass in the req from our route (lets us check if a user is logged in or not)
     },
-    function(req, email, password, done) {
+    async function(req, email, password, done) {
       // console.log(email,password);
         if (email)
             email = email.toLowerCase(); // Use lower-case e-mails to avoid case-sensitive e-mail matching
 
         // asynchronous
-        process.nextTick(function() {
-            User.findOne({ 'local.email' :  email }, function(err, user) {
-                // if there are any errors, return the error
-                if (err)
-                    return done(err);
-
+        process.nextTick(async function() {
+            try {
+                const user = await User.findOne({ 'local.email' :  email });
                 // if no user is found, return the message
                 if (!user)
                     return done(null, false, req.flash('loginMessage', 'No user found.'));
@@ -55,7 +55,9 @@ module.exports = function(passport) {
                 // all is well, return user
                 else
                     return done(null, user);
-            });
+            } catch (err) {
+                return done(err);
+            }
         });
 
     }));
@@ -69,18 +71,16 @@ module.exports = function(passport) {
         passwordField : 'passwordR',
         passReqToCallback : true // allows us to pass in the req from our route (lets us check if a user is logged in or not)
     },
-    function(req, email, password, done) {
+    async function(req, email, password, done) {
         if (email)
             email = email.toLowerCase(); // Use lower-case e-mails to avoid case-sensitive e-mail matching
 
         // asynchronous
-        process.nextTick(function() {
-            // if the user is not already logged in:
-            if (!req.user) {
-                User.findOne({ 'local.email' :  email }, function(err, user) {
-                    // if there are any errors, return the error
-                    if (err)
-                        return done(err);
+        process.nextTick(async function() {
+            try {
+                // if the user is not already logged in:
+                if (!req.user) {
+                    const user = await User.findOne({ 'local.email' :  email });
 
                     // check to see if theres already a user with that email
                     if (user) {
@@ -92,49 +92,35 @@ module.exports = function(passport) {
                         newUser.local.email    = email;
                         newUser.local.password = newUser.generateHash(password);
 
-                        newUser.save(function(err) {
-                            if (err)
-                                return done(err);
-
-                            return done(null, newUser);
-
-                        });
+                        await newUser.save();
+                        return done(null, newUser);
                     }
 
-                });
-            // if the user is logged in but has no local account...
-            } else if ( !req.user.local.email ) {
-                // ...presumably they're trying to connect a local account
-                // BUT let's check if the email used to connect a local account is being used by another user
-                User.findOne({ 'local.email' :  email }, function(err, user) {
-                    if (err){
-                        console.log(err);
-                        return done(err);
-                    }
+                // if the user is logged in but has no local account...
+                } else if ( !req.user.local.email ) {
+                    // ...presumably they're trying to connect a local account
+                    // BUT let's check if the email used to connect a local account is being used by another user
+                    const user = await User.findOne({ 'local.email' :  email });
 
                     if (user) {
                         return done(null, false, req.flash('loginMessage', 'That email is already taken.'));
                         // Using 'loginMessage instead of signupMessage because it's used by /connect/local'
                     } else {
-console.log("here 2");
-                        var user = req.user;
-                        user.local.email = email;
-                        user.local.password = user.generateHash(password);
-                        user.save(function (err) {
-                            if (err)
-                              console.log(err);
-                              return done(err, false, { message: 'bad password' })
-                               // return done(err);
-                            
-                            return done(null,user);
-                        });
+                        console.log("here 2");
+                        var updatingUser = req.user;
+                        updatingUser.local.email = email;
+                        updatingUser.local.password = updatingUser.generateHash(password);
+                        await updatingUser.save();
+                        return done(null, updatingUser);
                     }
-                });
-            } else {
-                // user is logged in and already has a local account. Ignore signup. (You should log out before trying to create a new account, user!)
-                return done(null, req.user);
+                } else {
+                    // user is logged in and already has a local account. Ignore signup. (You should log out before trying to create a new account, user!)
+                    return done(null, req.user);
+                }
+            } catch (err) {
+                console.log(err);
+                return done(err);
             }
-
         });
 
     }));

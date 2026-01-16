@@ -328,10 +328,20 @@ var doLogout = function()
 
         reticle = new THREE.Mesh(
             new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-            new THREE.MeshBasicMaterial()
+            new THREE.MeshBasicMaterial({
+                color: 0x00ff00,
+                emissive: 0x00ff00,
+                emissiveIntensity: 0.8,
+                fog: false,
+                depthTest: true,
+                depthWrite: false,
+                transparent: true,
+                opacity: 0.8
+            })
         );
         reticle.matrixAutoUpdate = false;
         reticle.visible = false;
+        reticle.renderOrder = 1000; // Render on top
         scene.add(reticle);
 
         // Capture GPS and heading upfront
@@ -816,6 +826,8 @@ var doLogout = function()
             // Create and add new drop
             const marker = createDropMarker(item, matchConfidence, null);
             if (marker) {
+                marker.frustumCulled = false; // Disable frustum culling for WebXR compatibility
+                marker.renderOrder = 50;
                 scene.add(marker);
                 droppedObjects.set(dropId, {
                     id: dropId,
@@ -893,11 +905,33 @@ var doLogout = function()
             return marker;
         }
 
-        // Fallback: create green sphere if model not ready
-        const geom = new THREE.SphereGeometry(0.1, 8, 8);
-        const mat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+        // Fallback: create colored sphere if model not ready
+        // Use color based on model index for visual variety
+        const colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff];
+        const color = colors[modelIdx % colors.length];
+        
+        const geom = new THREE.SphereGeometry(0.2, 16, 16);
+        const mat = new THREE.MeshStandardMaterial({
+            color: color,
+            emissive: color,
+            emissiveIntensity: 0.6,
+            metalness: 0.7,
+            roughness: 0.3,
+            fog: false
+        });
         marker = new THREE.Mesh(geom, mat);
         marker.position.set(east, y, north);
+        marker.renderOrder = 100;
+        
+        // Add a visible label sphere inside for extra visibility
+        const labelGeom = new THREE.SphereGeometry(0.15, 12, 12);
+        const labelMat = new THREE.MeshBasicMaterial({
+            color: color,
+            fog: false
+        });
+        const labelSphere = new THREE.Mesh(labelGeom, labelMat);
+        marker.add(labelSphere);
+        
         return marker;
     }
 

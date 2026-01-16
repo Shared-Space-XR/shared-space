@@ -2,14 +2,14 @@
   "dependencies": {
     "bcrypt-nodejs": "^0.0.3",
     "body-parser": "^2.2.1",
-    "connect-mongo": "^2.0.3",
+    "connect-mongo": "^5.0.1",
     "express": "^3.21.2",
     "express-flash": "^0.0.2",
     "fs": "^0.0.1-security",
     "greenlock-express": "^2.7.18",
     "method-override": "^3.0.0",
-    "mongodb": "2.2",
-    "mongoose": "^4.13.21",
+    "mongodb": "^6.0.0",
+    "mongoose": "^8.0.0",
     "mongoskin": "^2.1.0",
     "passport": "^0.7.0",
     "passport-local": "^1.0.0"
