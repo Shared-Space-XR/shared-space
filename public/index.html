@@ -335,21 +335,17 @@ var doLogout = function()
         scene.add(controller);
 
         reticle = new THREE.Mesh(
-            new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-            new THREE.MeshBasicMaterial({
+            new THREE.ConeGeometry(0.1, 0.05, 32),
+            new THREE.MeshPhongMaterial({
                 color: 0x00ff00,
                 emissive: 0x00ff00,
-                emissiveIntensity: 0.8,
-                fog: false,
-                depthTest: true,
-                depthWrite: false,
-                transparent: true,
-                opacity: 0.8
+                emissiveIntensity: 1.0,
+                wireframe: false
             })
         );
         reticle.matrixAutoUpdate = false;
         reticle.visible = false;
-        reticle.renderOrder = 1000; // Render on top
+        reticle.frustumCulled = false;
         scene.add(reticle);
 
         // Capture GPS and heading upfront
@@ -962,13 +958,11 @@ var doLogout = function()
         const color = colors[modelIdx % colors.length];
         
         const geom = new THREE.SphereGeometry(0.2, 16, 16);
-        const mat = new THREE.MeshStandardMaterial({
+        const mat = new THREE.MeshPhongMaterial({
             color: color,
             emissive: color,
-            emissiveIntensity: 0.6,
-            metalness: 0.7,
-            roughness: 0.3,
-            fog: false
+            emissiveIntensity: 0.8,
+            shininess: 100
         });
         marker = new THREE.Mesh(geom, mat);
         marker.position.set(east, y, north);
@@ -976,9 +970,10 @@ var doLogout = function()
         
         // Add a visible label sphere inside for extra visibility
         const labelGeom = new THREE.SphereGeometry(0.15, 12, 12);
-        const labelMat = new THREE.MeshBasicMaterial({
+        const labelMat = new THREE.MeshPhongMaterial({
             color: color,
-            fog: false
+            emissive: color,
+            emissiveIntensity: 0.5
         });
         const labelSphere = new THREE.Mesh(labelGeom, labelMat);
         marker.add(labelSphere);
@@ -995,10 +990,12 @@ var doLogout = function()
             
             // Create small plane visualization (0.3m square)
             const planeGeom = new THREE.PlaneGeometry(0.3, 0.3);
-            const planeMat = new THREE.MeshBasicMaterial({
+            const planeMat = new THREE.MeshPhongMaterial({
                 color: 0x0088ff,
+                emissive: 0x0088ff,
+                emissiveIntensity: 0.5,
                 transparent: true,
-                opacity: 0.3,
+                opacity: 0.6,
                 side: THREE.DoubleSide
             });
             const plane = new THREE.Mesh(planeGeom, planeMat);
@@ -1148,10 +1145,12 @@ var doLogout = function()
 
             const texture = new THREE.CanvasTexture(canvas);
             const geom = new THREE.PlaneGeometry(0.5, 0.32);
-            const mat = new THREE.MeshBasicMaterial({
+            const mat = new THREE.MeshPhongMaterial({
                 map: texture,
                 transparent: true,
-                side: THREE.DoubleSide
+                side: THREE.DoubleSide,
+                emissiveMap: texture,
+                emissiveIntensity: 0.9
             });
             const badge = new THREE.Mesh(geom, mat);
             badge.userData.isBadge = true;
