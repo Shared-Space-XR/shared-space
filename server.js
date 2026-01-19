@@ -2,8 +2,8 @@ var url = require("url"),
 	querystring = require("querystring");
 var passport = require('passport');
 var fs = require('fs');
-	//var dbURL = 'mongodb://44.246.204.171:27017/test';
-	var dbURL = 'mongodb://127.0.0.1:27017/test';
+	var dbURL = 'mongodb://44.246.204.171:27017/test';
+	//var dbURL = 'mongodb://127.0.0.1:27017/test';
 var path = require('path'),
   express = require('express');
 
@@ -51,25 +51,25 @@ mongoClient.connect().then(() => {
 }).catch(err => console.error('MongoDB connection error:', err));
 
 
-app.get("/api/dropObject"/*, isLoggedIn*/, function(req,res){
-  var query = {};
-  if (req.user && req.user._id) {
-    query.userId = req.user._id;
-  }
-  db.collection('drops')
-    .find(query)
-    .sort({_id: -1})
-    .limit(50)
-    .toArray(function(err, docs){
-    if(err){
-      res.status(500).json({ ok: false, error: err.toString() });
-      return;
+app.get("/api/dropObject"/*, isLoggedIn*/, async function(req,res){
+  try {
+    var query = {};
+    // Only filter by userId if user is logged in
+    if (req.isAuthenticated() && req.user && req.user._id) {
+      query.userId = req.user._id;
     }
+    const docs = await db.collection('drops')
+      .find(query)
+      .sort({_id: -1})
+      .limit(50)
+      .toArray();
     res.json({ ok: true, items: docs || [] });
-    });
+  } catch(err){
+    res.status(500).json({ ok: false, error: err.toString() });
+  }
 })
 
-app.post("/api/dropObject", isLoggedIn, function(req,res){
+app.post("/api/dropObject", isLoggedIn, async function(req,res){
   try{
     var payload = req.body || {};
     var doc = {
@@ -81,27 +81,17 @@ app.post("/api/dropObject", isLoggedIn, function(req,res){
       alt: payload.alt,
       localPos: payload.localPos,
       quaternion: payload.quaternion,
-      hitTestMatrix: payload.hitTestMatrix,
-      planeMetadata: payload.planeMetadata,
       cameraSnapshot: payload.cameraSnapshot,
       timestamp: payload.timestamp || Date.now(),
       createdAt: new Date(payload.timestamp || Date.now())
     };
 
-    db.collection('drops').insert(doc, function(err, result){
-      if(err){
-        res.status(500).json({ ok: false, error: err.toString() });
-        return;
-      }
-      var insertedId = null;
-      if (result && result.insertedIds && result.insertedIds.length) {
-        insertedId = result.insertedIds[0];
-      } else if (result && result.ops && result.ops[0] && result.ops[0]._id) {
-        insertedId = result.ops[0]._id;
-      }
-      res.json({ ok: true, id: insertedId });
-    });
+    const result = await db.collection('drops').insertOne(doc);
+    const insertedId = result.insertedId;
+    console.log('Dropped object stored:', insertedId);
+    res.json({ ok: true, id: insertedId });
   }catch(e){
+    console.error('Drop storage error:', e);
     res.status(500).json({ ok: false, error: e.toString() });
   }
 })

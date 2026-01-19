@@ -134,7 +134,7 @@
 
         #drop-button {
             position: fixed;
-            bottom: calc(15vh + 10px);
+            bottom: 200px;
             left: 50%;
             transform: translateX(-50%);
             padding: 15px 30px;
@@ -200,7 +200,7 @@ var doLogout = function()
         <iframe id="viz-iframe" src="viz.html"></iframe>
     </div>
 
-    <button id="drop-button" disabled>Drop Pin</button>
+    <button id="drop-button">Drop Pin</button>
 
     <canvas id="canvas"></canvas>
     <div class="navbar">
@@ -219,16 +219,17 @@ var doLogout = function()
     import { XREstimatedLight } from "https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/XREstimatedLight.js";
 
     let reticle;
-    let hitTestSource = null;
-    let hitTestSourceRequested = false;
-    let lastReticleMatrix = null; // Capture hit test surface
-
     let scene, camera, renderer;
+    
+    // Current height adjustment state
+    let currentTargetHeight = -1.5; // Start at ground level below camera
 
     // Geo reference state
     let geoOrigin = null; // {lat, lon, alt}
     let headingDeg = null; // degrees clockwise from North
     let hasGeo = false;
+    let xrSessionStarted = false; // Track if XR session has started
+    let geoWatchId = null; // Store GPS watch ID so we can stop it after XR starts
     
     // Visual place recognition state
     let currentCameraSnapshot = null; // Current frame texture for feature matching
@@ -256,17 +257,9 @@ var doLogout = function()
     let controller;
     let dropButton; // UI button for dropping objects
 
-    let debugMode = false; // Toggle with query param ?debug=1
-
     init();
     setupFurnitureSelection();
     animate();
-
-    // Check for debug mode
-    if (new URLSearchParams(window.location.search).get('debug') === '1') {
-        debugMode = true;
-        console.log('🔧 Debug mode enabled');
-    }
 
     function init() {
         let myCanvas = document.getElementById("canvas");
@@ -314,8 +307,8 @@ var doLogout = function()
         });
 
         let arButton = ARButton.createButton(renderer, {
-            requiredFeatures: ["hit-test"],
-            optionalFeatures: ["dom-overlay", "light-estimation"],
+            requiredFeatures: ["dom-overlay"],
+            optionalFeatures: ["light-estimation"],
             domOverlay: { root: document.body },
         });
         arButton.style.bottom = "calc(100vh - 150px)";
@@ -334,7 +327,7 @@ var doLogout = function()
         controller = renderer.xr.getController(0);
         scene.add(controller);
 
-        // Highly visible reticle for WebXR viewers (basic material, no lighting dependency)
+        // Highly visible reticle for camera-based placement
         reticle = new THREE.Mesh(
             new THREE.RingGeometry(0.15, 0.22, 32).rotateX(-Math.PI / 2),
             new THREE.MeshBasicMaterial({
@@ -346,14 +339,25 @@ var doLogout = function()
                 depthWrite: false
             })
         );
-        reticle.matrixAutoUpdate = true; // Enable for camera-based movement
+        reticle.matrixAutoUpdate = true;
         reticle.visible = false;
         reticle.frustumCulled = false;
-        reticle.renderOrder = 2000; // draw on top
+        reticle.renderOrder = 2000;
         scene.add(reticle);
+        
+        // Setup height controls
+        document.getElementById('height-down')?.addEventListener('click', () => {
+            currentTargetHeight -= 0.2;
+            updateHeightDisplay();
+        });
+        document.getElementById('height-up')?.addEventListener('click', () => {
+            currentTargetHeight += 0.2;
+            updateHeightDisplay();
+        });
+        updateHeightDisplay();
 
-        // Capture GPS and heading upfront
-        initGeolocation();
+        // NOTE: GPS will be initialized when XR session starts
+        // This ensures we have a stable geo origin tied to camera pose
 
         // Fetch dropped objects from server
         fetchDroppedObjects();
@@ -371,26 +375,30 @@ var doLogout = function()
     }
 
     function onDropButtonClick() {
-        // Reticle shows where object will be placed
-        lastReticleMatrix = reticle.matrix.clone();
+        if (reticle.visible) {
+            let newModel = items[itemSelectedIndex].clone();
+            newModel.visible = true;
+            
+            // Position at reticle using camera direction + height adjustment
+            const cameraDirection = new THREE.Vector3(0, 0, -1);
+            cameraDirection.applyQuaternion(camera.quaternion);
 
-        let newModel = items[itemSelectedIndex].clone();
-        newModel.visible = true;
-        
-        // Place at reticle position
-        newModel.position.copy(reticle.position);
-        newModel.quaternion.copy(reticle.quaternion);
-        
-        let scaleFactor = modelScaleFactor[itemSelectedIndex];
-        newModel.scale.set(scaleFactor, scaleFactor, scaleFactor);
+            const dropPos = new THREE.Vector3();
+            dropPos.copy(camera.position);
+            dropPos.addScaledVector(cameraDirection, 1.5); // 1.5m forward
+            dropPos.y = currentTargetHeight;
+            
+            newModel.position.copy(dropPos);
+            let scaleFactor = modelScaleFactor[itemSelectedIndex];
+            newModel.scale.set(scaleFactor, scaleFactor, scaleFactor);
 
             scene.add(newModel);
 
-            // Report approximate GPS for dropped object
+            // Convert local XR position to GPS
             const worldPos = newModel.position.clone();
             const approxGeo = localToLatLon(worldPos);
             if (approxGeo) {
-                console.log('Dropped object approximate GPS:', approxGeo);
+                console.log('Dropped object GPS:', approxGeo);
                 const coords = `${approxGeo.lat.toFixed(6)}, ${approxGeo.lon.toFixed(6)}`;
                 showToast(`Lat: ${approxGeo.lat.toFixed(6)}, Lon: ${approxGeo.lon.toFixed(6)}`);
                 
@@ -402,7 +410,7 @@ var doLogout = function()
                 const dropSnapshot = captureCanvasSnapshot();
                 console.log('Camera snapshot captured:', dropSnapshot ? 'YES' : 'NO');
                 
-                // Persist to backend with surface data
+                // Persist to backend
                 persistCoordinates({
                     modelIndex: itemSelectedIndex,
                     lat: approxGeo.lat,
@@ -410,14 +418,15 @@ var doLogout = function()
                     alt: approxGeo.alt,
                     localPos: { x: worldPos.x, y: worldPos.y, z: worldPos.z },
                     quaternion: { x: newModel.quaternion.x, y: newModel.quaternion.y, z: newModel.quaternion.z, w: newModel.quaternion.w },
-                    hitTestMatrix: Array.from(lastReticleMatrix.elements),
-                    planeMetadata: extractPlaneMetadata(lastReticleMatrix),
                     cameraSnapshot: dropSnapshot,
                     timestamp: Date.now()
                 });
             } else {
                 showToast('GPS not available; showing local placement only');
             }
+        } else {
+            showToast('AR session not active');
+        }
     }
 
     const onClicked = (e, selectItem, index) => {
@@ -523,39 +532,31 @@ var doLogout = function()
 
     function render(timestamp, frame) {
         if (frame) {
-            const referenceSpace = renderer.xr.getReferenceSpace();
             const session = renderer.xr.getSession();
 
-            if (hitTestSourceRequested === false) {
-                session.addEventListener("end", onSessionEnded);
-                
-                // Show drop button when AR session starts
-                if (dropButton) {
-                    dropButton.style.display = 'block';
-                    dropButton.disabled = false; // Always enabled
-                }
-                
-                console.log('✓ AR session started (camera-based placement)');
-                hitTestSourceRequested = true;
+            // Initialize GPS and heading on first XR frame
+            if (!xrSessionStarted) {
+                xrSessionStarted = true;
+                initGeolocation();
             }
-            
-            // Place reticle 1.5m in front of camera at ground level
-            camera.updateMatrixWorld();
-            
+
+            // Show drop button when AR session active
+            const btn = document.getElementById('drop-button');
+            if (btn) {
+                btn.style.display = 'block';
+            }
+
+            // Update reticle position based on camera direction
             const cameraDirection = new THREE.Vector3(0, 0, -1);
             cameraDirection.applyQuaternion(camera.quaternion);
-            
+
             const reticlePos = new THREE.Vector3();
             reticlePos.copy(camera.position);
             reticlePos.addScaledVector(cameraDirection, 1.5); // 1.5m forward
-            reticlePos.y = camera.position.y - 1.3; // Ground level
+            reticlePos.y = currentTargetHeight;
             
             reticle.position.copy(reticlePos);
-            reticle.rotation.set(-Math.PI / 2, 0, 0);
             reticle.visible = true;
-            
-            reticle.updateMatrix();
-            lastReticleMatrix = reticle.matrix.clone();
         }
 
         // Update frustum culling for dropped objects
@@ -591,28 +592,34 @@ var doLogout = function()
     function initGeolocation() {
         if (!('geolocation' in navigator)) return;
         
-        // Continuously watch position for latest GPS data
-        const watchId = navigator.geolocation.watchPosition(
+        // Get initial GPS position once to set the geo origin
+        navigator.geolocation.getCurrentPosition(
             (pos) => {
                 const { latitude, longitude, altitude } = pos.coords;
+                // Set geo origin from current GPS + camera pose (camera is at origin in XR)
                 geoOrigin = { lat: latitude, lon: longitude, alt: altitude || 0 };
                 hasGeo = true;
                 updateHUD();
-                console.log('GPS updated:', latitude.toFixed(6), longitude.toFixed(6));
+                console.log('GPS origin set at start of XR session:', latitude.toFixed(6), longitude.toFixed(6));
             },
             (err) => {
-                console.warn('Geolocation error:', err);
+                console.warn('Geolocation error on XR start:', err);
+                // Set a default origin at 0,0 if GPS fails
+                geoOrigin = { lat: 0, lon: 0, alt: 0 };
+                hasGeo = false;
                 updateHUD();
             },
             { 
                 enableHighAccuracy: true, 
-                maximumAge: 0,  // Always get fresh position
-                timeout: 10000 
+                timeout: 5000 
             }
         );
 
         // Update HUD every second for heading changes
         setInterval(updateHUD, 1000);
+        
+        // NOTE: We do NOT continuously watch GPS after XR starts
+        // GPS position is now calculated from camera pose instead
 
         // Try to get heading via deviceorientation (may require permission)
         const requestPerm = window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function';
@@ -635,8 +642,9 @@ var doLogout = function()
     }
 
     // Convert local XR meters (X ~ East, Z ~ North) to lat/lon around geoOrigin
+    // The local position is relative to camera origin in XR space
     function localToLatLon(localPos) {
-        if (!hasGeo || !geoOrigin) return null;
+        if (!geoOrigin) return null;
         const R = 6378137; // WGS84 Earth radius (m)
         const lat0 = geoOrigin.lat * Math.PI / 180.0;
         const cosLat0 = Math.cos(lat0);
@@ -705,6 +713,13 @@ var doLogout = function()
         }
     }
 
+    function updateHeightDisplay() {
+        const heightValue = document.getElementById('height-value');
+        if (heightValue) {
+            heightValue.textContent = (currentTargetHeight + 1.5).toFixed(1);
+        }
+    }
+
     function persistCoordinates(data) {
         // Send coordinates to backend endpoint
         fetch('/api/dropObject', {
@@ -752,51 +767,9 @@ var doLogout = function()
                 return;
             }
 
-            // Compute plane match confidence if current surface available
-            let matchConfidence = null;
-            if (lastReticleMatrix && item.planeMetadata) {
-                try {
-                    const currentMeta = extractPlaneMetadata(lastReticleMatrix);
-                    const match = findMatchingPlane(item.planeMetadata, currentMeta);
-                    matchConfidence = Math.round(match.confidence * 100);
-                } catch (e) {
-                    console.warn('Could not compute plane match:', e);
-                }
-            }
-
-            // Compute place recognition confidence if snapshots available (async)
-            const processPlaceRecognition = async () => {
-                let placeRecognitionConfidence = 0;
-                if (placeRecognitionEnabled && item.cameraSnapshot && currentCameraSnapshot) {
-                    try {
-                        const [storedHash, currentHash] = await Promise.all([
-                            computeImageHash(item.cameraSnapshot),
-                            computeImageHash(currentCameraSnapshot)
-                        ]);
-                        placeRecognitionConfidence = computePlaceRecognitionConfidence(storedHash, currentHash);
-                        const placeConfidencePct = Math.round(placeRecognitionConfidence * 100);
-                        
-                        if (placeRecognitionConfidence > 0.4) {
-                            console.log(`✓ Place recognition match for ${dropId}: ${placeConfidencePct}%`);
-                            
-                            // Update stored confidence and badge
-                            const drop = droppedObjects.get(dropId);
-                            if (drop && drop.mesh) {
-                                drop.placeRecognitionConfidence = placeRecognitionConfidence;
-                                updateDropBadge(drop.mesh, matchConfidence, placeConfidencePct);
-                            }
-                        }
-                    } catch (e) {
-                        console.warn('Place recognition failed:', e);
-                    }
-                }
-            };
-
             // Create and add new drop
-            const marker = createDropMarker(item, matchConfidence, null);
+            const marker = createDropMarker(item, null, null);
             if (marker) {
-                marker.frustumCulled = false; // Disable frustum culling for WebXR compatibility
-                marker.renderOrder = 50;
                 scene.add(marker);
                 droppedObjects.set(dropId, {
                     id: dropId,
@@ -804,12 +777,9 @@ var doLogout = function()
                     lon: item.lon,
                     alt: item.alt,
                     mesh: marker,
-                    matchConfidence: matchConfidence,
+                    matchConfidence: null,
                     placeRecognitionConfidence: 0
                 });
-                
-                // Process place recognition asynchronously
-                processPlaceRecognition();
             }
         });
     }
@@ -837,7 +807,8 @@ var doLogout = function()
             north = e * sinH + n * cosH;
         }
 
-        const y = -1.5; // Place below camera (most phones hold at ~1.5m eye height)
+        // Use stored Y position or default to -1.5
+        const y = item.localPos?.y || -1.5;
         const modelIdx = item.modelIndex || 0;
         let marker = null;
 
@@ -847,7 +818,7 @@ var doLogout = function()
             marker.visible = true;
             const scaleFactor = modelScaleFactor[modelIdx] || 0.01;
             marker.scale.set(scaleFactor, scaleFactor, scaleFactor);
-            marker.position.set(east, y, north); // y=-1.5 for ground level
+            marker.position.set(east, y, north);
             
             // Restore quaternion if available
             if (item.quaternion) {
@@ -859,47 +830,14 @@ var doLogout = function()
                 );
             }
             
-            // Add surface plane visualization if hit test matrix available
-            if (item.hitTestMatrix && item.hitTestMatrix.length === 16) {
-                const surfacePlane = createSurfacePlane(item.hitTestMatrix, marker.position);
-                if (surfacePlane) marker.add(surfacePlane);
-            }
-            
-            // Add confidence badge if available
-            if (item.planeMetadata) {
-                const badge = createConfidenceBadge(item.planeMetadata, matchConfidence, placeConfidence);
-                if (badge) marker.add(badge);
-            }
-            
             return marker;
         }
 
-        // Fallback: create colored sphere if model not ready
-        // Use color based on model index for visual variety
-        const colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff];
-        const color = colors[modelIdx % colors.length];
-        
-        const geom = new THREE.SphereGeometry(0.2, 16, 16);
-        const mat = new THREE.MeshPhongMaterial({
-            color: color,
-            emissive: color,
-            emissiveIntensity: 0.8,
-            shininess: 100
-        });
+        // Fallback: create green sphere if model not ready
+        const geom = new THREE.SphereGeometry(0.1, 8, 8);
+        const mat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
         marker = new THREE.Mesh(geom, mat);
         marker.position.set(east, y, north);
-        marker.renderOrder = 100;
-        
-        // Add a visible label sphere inside for extra visibility
-        const labelGeom = new THREE.SphereGeometry(0.15, 12, 12);
-        const labelMat = new THREE.MeshPhongMaterial({
-            color: color,
-            emissive: color,
-            emissiveIntensity: 0.5
-        });
-        const labelSphere = new THREE.Mesh(labelGeom, labelMat);
-        marker.add(labelSphere);
-        
         return marker;
     }
 
@@ -912,12 +850,10 @@ var doLogout = function()
             
             // Create small plane visualization (0.3m square)
             const planeGeom = new THREE.PlaneGeometry(0.3, 0.3);
-            const planeMat = new THREE.MeshPhongMaterial({
+            const planeMat = new THREE.MeshBasicMaterial({
                 color: 0x0088ff,
-                emissive: 0x0088ff,
-                emissiveIntensity: 0.5,
                 transparent: true,
-                opacity: 0.6,
+                opacity: 0.3,
                 side: THREE.DoubleSide
             });
             const plane = new THREE.Mesh(planeGeom, planeMat);
@@ -1067,12 +1003,10 @@ var doLogout = function()
 
             const texture = new THREE.CanvasTexture(canvas);
             const geom = new THREE.PlaneGeometry(0.5, 0.32);
-            const mat = new THREE.MeshPhongMaterial({
+            const mat = new THREE.MeshBasicMaterial({
                 map: texture,
                 transparent: true,
-                side: THREE.DoubleSide,
-                emissiveMap: texture,
-                emissiveIntensity: 0.9
+                side: THREE.DoubleSide
             });
             const badge = new THREE.Mesh(geom, mat);
             badge.userData.isBadge = true;
