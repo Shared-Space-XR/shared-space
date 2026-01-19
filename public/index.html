@@ -280,10 +280,13 @@ var doLogout = function()
 
     function init() {
         let myCanvas = document.getElementById("canvas");
+        const width = myCanvas.clientWidth || window.innerWidth;
+        const height = myCanvas.clientHeight || window.innerHeight;
+
         scene = new THREE.Scene();
         camera = new THREE.PerspectiveCamera(
             130,
-            myCanvas.innerWidth / myCanvas.innerHeight,
+            width / height,
             0.01,
             20
         );
@@ -298,7 +301,7 @@ var doLogout = function()
             alpha: true,
         });
         renderer.setPixelRatio(window.devicePixelRatio);
-        renderer.setSize(myCanvas.innerWidth, myCanvas.innerHeight);
+        renderer.setSize(width, height);
         renderer.xr.enabled = true;
 
         // Don't add the XREstimatedLight to the scene initially
