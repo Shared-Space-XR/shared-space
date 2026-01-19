@@ -396,6 +396,19 @@ var doLogout = function()
         // Setup QR scanner canvas
         qrCanvas = document.getElementById('qr-canvas');
         qrContext = qrCanvas.getContext('2d');
+        
+        // Handle window resize to fix glitchy rendering
+        window.addEventListener('resize', onWindowResize, false);
+    }
+    
+    function onWindowResize() {
+        const myCanvas = document.getElementById("canvas");
+        const width = myCanvas.clientWidth || window.innerWidth;
+        const height = myCanvas.clientHeight || window.innerHeight;
+        
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
     }
 
     function onDropButtonClick() {
@@ -417,6 +430,17 @@ var doLogout = function()
             newModel.scale.set(scaleFactor, scaleFactor, scaleFactor);
 
             scene.add(newModel);
+            
+            // Track in droppedObjects with temporary ID to prevent duplication
+            const tempId = 'temp_' + Date.now();
+            droppedObjects.set(tempId, {
+                id: tempId,
+                lat: null,
+                lon: null,
+                alt: null,
+                mesh: newModel,
+                temporary: true
+            });
 
             // Convert local XR position to GPS
             const worldPos = newModel.position.clone();
@@ -444,7 +468,7 @@ var doLogout = function()
                     quaternion: { x: newModel.quaternion.x, y: newModel.quaternion.y, z: newModel.quaternion.z, w: newModel.quaternion.w },
                     cameraSnapshot: dropSnapshot,
                     timestamp: Date.now()
-                });
+                }, tempId);
             } else {
                 showToast('GPS not available; showing local placement only');
             }
@@ -811,7 +835,7 @@ var doLogout = function()
         }
     }
 
-    function persistCoordinates(data) {
+    function persistCoordinates(data, tempId) {
         // Send coordinates to backend endpoint
         fetch('/api/dropObject', {
             method: 'POST',
@@ -819,7 +843,20 @@ var doLogout = function()
             body: JSON.stringify(data)
         })
         .then(res => res.json())
-        .then(result => console.log('Persisted:', result))
+        .then(result => {
+            console.log('Persisted:', result);
+            // Remove temporary entry if we got a real ID back
+            if (tempId && result._id && droppedObjects.has(tempId)) {
+                const tempObj = droppedObjects.get(tempId);
+                droppedObjects.delete(tempId);
+                // Update with real ID from server
+                droppedObjects.set(String(result._id), {
+                    ...tempObj,
+                    id: String(result._id),
+                    temporary: false
+                });
+            }
+        })
         .catch(err => console.warn('Persist failed:', err));
     }
 
@@ -839,9 +876,26 @@ var doLogout = function()
         // Build set of incoming IDs
         const incomingIds = new Set(items.map(i => String(i._id || i.id)));
 
-        // Only remove drops that are more than 500m away (very far) to avoid constant flickering
+        // Remove temporary entries and objects that are very far away
         const toRemove = [];
         droppedObjects.forEach((drop, dropId) => {
+            // Remove temporary entries that now exist in server data
+            if (drop.temporary) {
+                // Check if any incoming item matches this position (within 1m)
+                const matchesExisting = items.some(item => {
+                    if (!drop.mesh || !item.lat || !item.lon) return false;
+                    const marker = createDropMarker(item, null, null);
+                    if (!marker) return false;
+                    const distance = drop.mesh.position.distanceTo(marker.position);
+                    return distance < 1; // Within 1 meter
+                });
+                if (matchesExisting) {
+                    scene.remove(drop.mesh);
+                    toRemove.push(dropId);
+                }
+                return;
+            }
+            
             if (!incomingIds.has(dropId)) {
                 // Check distance - only remove if very far away
                 const distance = camera.position.distanceTo(drop.mesh.position);
