@@ -265,7 +265,7 @@ var doLogout = function()
         let myCanvas = document.getElementById("canvas");
         scene = new THREE.Scene();
         camera = new THREE.PerspectiveCamera(
-            70,
+            130,
             myCanvas.innerWidth / myCanvas.innerHeight,
             0.01,
             20
@@ -379,13 +379,13 @@ var doLogout = function()
             let newModel = items[itemSelectedIndex].clone();
             newModel.visible = true;
             
-            // Position at reticle using camera direction + height adjustment
+            // Position at center of camera view (screen center)
             const cameraDirection = new THREE.Vector3(0, 0, -1);
             cameraDirection.applyQuaternion(camera.quaternion);
 
             const dropPos = new THREE.Vector3();
             dropPos.copy(camera.position);
-            dropPos.addScaledVector(cameraDirection, 1.5); // 1.5m forward
+            dropPos.addScaledVector(cameraDirection, 5.0); // 5.0m forward for better depth
             dropPos.y = currentTargetHeight;
             
             newModel.position.copy(dropPos);
@@ -546,14 +546,14 @@ var doLogout = function()
                 btn.style.display = 'block';
             }
 
-            // Update reticle position based on camera direction
+            // Update reticle position to center of camera view
             const cameraDirection = new THREE.Vector3(0, 0, -1);
             cameraDirection.applyQuaternion(camera.quaternion);
 
             const reticlePos = new THREE.Vector3();
             reticlePos.copy(camera.position);
-            reticlePos.addScaledVector(cameraDirection, 1.5); // 1.5m forward
-            reticlePos.y = currentTargetHeight;
+            reticlePos.addScaledVector(cameraDirection, 5.0); // 5.0m forward for better depth
+            reticlePos.y = currentTargetHeight + 0.3; // Raised by 0.3m
             
             reticle.position.copy(reticlePos);
             reticle.visible = true;
@@ -571,7 +571,8 @@ var doLogout = function()
         
         droppedObjects.forEach(drop => {
             if (drop.mesh) {
-                drop.mesh.visible = frustum.containsPoint(drop.mesh.position);
+                // Keep all objects visible permanently (persistent rendering)
+                drop.mesh.visible = true;
                 
                 // Orient badges toward camera
                 drop.mesh.traverse(child => {
@@ -748,12 +749,16 @@ var doLogout = function()
         // Build set of incoming IDs
         const incomingIds = new Set(items.map(i => String(i._id || i.id)));
 
-        // Remove drops no longer in server list
+        // Only remove drops that are more than 500m away (very far) to avoid constant flickering
         const toRemove = [];
         droppedObjects.forEach((drop, dropId) => {
             if (!incomingIds.has(dropId)) {
-                scene.remove(drop.mesh);
-                toRemove.push(dropId);
+                // Check distance - only remove if very far away
+                const distance = camera.position.distanceTo(drop.mesh.position);
+                if (distance > 1500) {
+                    scene.remove(drop.mesh);
+                    toRemove.push(dropId);
+                }
             }
         });
         toRemove.forEach(id => droppedObjects.delete(id));
