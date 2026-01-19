@@ -405,7 +405,7 @@ var doLogout = function()
                 // Update HUD
                 const hudLast = document.getElementById('hud-last');
                 if (hudLast) hudLast.textContent = coords;
-                
+                 
                 // Capture fresh camera snapshot for this drop
                 const dropSnapshot = captureCanvasSnapshot();
                 console.log('Camera snapshot captured:', dropSnapshot ? 'YES' : 'NO');
