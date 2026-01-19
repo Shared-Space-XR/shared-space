@@ -162,6 +162,18 @@
     </style>
         <script src="asyncReq.js"></script>
         <script>
+// Some environments (e.g., WKWebView shells) expect a native bridge.
+// Define a safe stub to prevent "undefined is not an object (evaluating 'window.webkit.messageHandlers.onUpdate.postMessage')" errors.
+if (typeof window !== 'undefined') {
+    window.webkit = window.webkit || {};
+    window.webkit.messageHandlers = window.webkit.messageHandlers || {};
+    if (!window.webkit.messageHandlers.onUpdate) {
+        window.webkit.messageHandlers.onUpdate = {
+            postMessage: function () { /* no-op stub for non-native contexts */ }
+        };
+    }
+}
+
 var main = function(){
   // check whether user is logged in
   loadFile("/loginStatus", function(data){
