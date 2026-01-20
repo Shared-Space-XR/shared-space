@@ -282,11 +282,11 @@ var doLogout = function()
     let controller;
     let dropButton; // UI button for dropping objects
 
-    init();
+    init().catch((e) => console.warn('Init failed:', e));
     setupFurnitureSelection();
     animate();
 
-    function init() {
+    async function init() {
         let myCanvas = document.getElementById("canvas");
         const width = myCanvas.clientWidth || window.innerWidth;
         const height = myCanvas.clientHeight || window.innerHeight;
@@ -313,6 +313,7 @@ var doLogout = function()
         renderer.setSize(width, height);
         renderer.xr.enabled = true;
 
+
         // Don't add the XREstimatedLight to the scene initially
         // It doesn't have any estimated lighting values until an AR session starts
         const xrLight = new XREstimatedLight(renderer);
@@ -334,6 +335,9 @@ var doLogout = function()
             // Revert back to the default environment
             // scene.environment =
         });
+
+        // Ask for camera permission up front; stop tracks immediately to free camera for XR
+        await requestCameraPermission();
 
         let arButton = ARButton.createButton(renderer, {
             requiredFeatures: ["dom-overlay"],
@@ -522,6 +526,21 @@ var doLogout = function()
         } catch (e) {
             console.warn('Failed to capture snapshot:', e);
             return null;
+        }
+    }
+
+    async function requestCameraPermission() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            // Immediately release the camera so XR can claim it
+            if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+            }
+            console.log('Camera permission granted (preflight)');
+        } catch (e) {
+            console.warn('Camera permission request failed:', e);
+            showToast('Camera permission is required for AR');
+            throw e;
         }
     }
 
