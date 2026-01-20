@@ -90,6 +90,21 @@
             background: rgba(0, 136, 255, 1);
         }
 
+        #calibrate-gps {
+            margin-top: 8px;
+            padding: 6px 10px;
+            background: rgba(100, 200, 255, 0.6);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+
+        #calibrate-gps:active {
+            background: rgba(100, 200, 255, 1);
+        }
+
         #viz-iframe-container {
             position: fixed;
             top: 60px;
@@ -197,7 +212,7 @@ var doLogout = function()
 <body onload="main()">
     <div id="root"></div>
 
-    <div id="geo-hud" style="display: none;">
+    <div id="geo-hud" style="display: block;">
         <div class="status-line"><span class="label">GPS:</span><span id="hud-gps">—</span></div>
         <div class="status-line"><span class="label">Heading:</span><span id="hud-heading">—</span></div>
         <div class="status-line"><span class="label">Last Drop:</span><span id="hud-last">—</span></div>
