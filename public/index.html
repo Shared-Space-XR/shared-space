@@ -212,7 +212,6 @@ var doLogout = function()
     <button id="drop-button">Drop Pin</button>
 
     <canvas id="canvas"></canvas>
-    <canvas id="qr-canvas" style="display:none;"></canvas>
     <div class="navbar">
         <img class="button-image" id="item0" src="pngs/armchair.png" />
         <img class="button-image" id="item1" src="pngs/lounger.png" />
@@ -227,8 +226,6 @@ var doLogout = function()
     import { ARButton } from 'https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/ARButton.js';
     import { GLTFLoader } from "https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/GLTFLoader.js";
     import { XREstimatedLight } from "https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/XREstimatedLight.js";
-    import QrScanner from 'https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.min.js';
-    QrScanner.WORKER_PATH = 'https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner-worker.min.js';
 
     let reticle;
     let scene, camera, renderer;
@@ -243,13 +240,6 @@ var doLogout = function()
     let xrSessionStarted = false; // Track if XR session has started
     let geoWatchId = null; // Store GPS watch ID so we can stop it after XR starts
     
-    // QR code scanning state (uses XR camera via getImageData if available)
-    let qrCanvas = null;
-    let qrContext = null;
-    let lastQRScanTime = 0;
-    let qrScanInterval = 500; // ms between scans (increased frequency)
-    let qrScanInProgress = false; // Prevent concurrent scans
-    let xrCameraAccessAvailable = false; // Track if camera-access feature is available
     
     // Visual place recognition state
     let currentCameraSnapshot = null; // Current frame texture for feature matching
@@ -330,10 +320,10 @@ var doLogout = function()
             // scene.environment =
         });
 
-        // Create AR button with optional camera access
+        // Create AR button
         let arButton = ARButton.createButton(renderer, {
             requiredFeatures: ["dom-overlay"],
-            optionalFeatures: ["light-estimation", "camera-access"],
+            optionalFeatures: ["light-estimation"],
             domOverlay: { root: document.body },
         });
         arButton.style.bottom = "calc(100vh - 150px)";
@@ -398,9 +388,6 @@ var doLogout = function()
         dropButton = document.getElementById('drop-button');
         dropButton.addEventListener('click', onDropButtonClick);
         
-        // Setup QR scanner canvas (reads from XR camera via preserveDrawingBuffer)
-        qrCanvas = document.getElementById('qr-canvas');
-        qrContext = qrCanvas.getContext('2d', { willReadFrequently: true });
         
         // Handle window resize to fix glitchy rendering
         window.addEventListener('resize', onWindowResize, false);
@@ -520,239 +507,9 @@ var doLogout = function()
         }
     }
 
-    async function requestCameraPermission() {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-            // Immediately release the camera so XR can claim it
-            if (stream) {
-                stream.getTracks().forEach(t => t.stop());
-            }
-            console.log('Camera permission granted (preflight)');
-        } catch (e) {
-            console.warn('Camera permission request failed:', e);
-            showToast('Camera permission is required for AR');
-            throw e;
-        }
-    }
 
-    async function startQRVideoScannerWithTimeout(timeoutMs = 3000) {
-        if (qrScannerReady || qrScannerStarting || qrScannerFailed) return;
-        if (!qrVideo) qrVideo = document.getElementById('qr-video');
-        if (!qrVideo) {
-            console.warn('QR video element missing');
-            qrScannerFailed = true;
-            return;
-        }
 
-        qrScannerStarting = true;
-        const controller = new AbortController();
-        const timer = setTimeout(() => {
-            controller.abort();
-        }, timeoutMs);
 
-        try {
-            qrScanner = new QrScanner(
-                qrVideo,
-                (result) => {
-                    if (result && result.data) {
-                        console.log('QR code detected (video):', result.data);
-                        showToast(`QR: ${result.data}`);
-                        processQRCode(result.data);
-                    }
-                },
-                {
-                    preferredCamera: 'environment',
-                    maxScansPerSecond: 6,
-                    returnDetailedScanResult: true,
-                    highlightCodeOutline: false,
-                    highlightScanRegion: false,
-                    alsoTryInverted: true,
-                    deviceId: undefined,
-                    // Pass abort signal to underlying getUserMedia via custom hook
-                    experimentalAbortSignal: controller.signal
-                }
-            );
-
-            await qrScanner.start();
-            qrScannerReady = true;
-            console.log('QR video scanner started');
-        } catch (e) {
-            qrScannerFailed = true;
-            console.warn('QR video scanner failed to start:', e);
-            showToast('QR scanner unavailable');
-        } finally {
-            clearTimeout(timer);
-            qrScannerStarting = false;
-        }
-    }
-
-    function scanForQRCode() {
-        if (!xrSessionStarted) {
-            qrScanInProgress = false;
-            return;
-        }
-        if (qrScanInProgress) return;
-        qrScanInProgress = true;
-
-        try {
-            if (!qrCanvas || !qrContext || !renderer) {
-                qrScanInProgress = false;
-                return;
-            }
-
-            const canvas = renderer.domElement;
-            if (!canvas || !canvas.width || !canvas.height) {
-                qrScanInProgress = false;
-                return;
-            }
-
-            // Use full resolution for better QR detection
-            qrCanvas.width = canvas.width;
-            qrCanvas.height = canvas.height;
-
-            // Copy current XR frame (camera + virtual) to 2D context
-            qrContext.drawImage(canvas, 0, 0, canvas.width, canvas.height);
-
-            // Get imageData for debugging
-            const imageData = qrContext.getImageData(0, 0, Math.min(100, canvas.width), Math.min(100, canvas.height)).data;
-            let nonZeroPixels = 0;
-            for (let i = 0; i < imageData.length; i += 4) {
-                if (imageData[i] > 0 || imageData[i+1] > 0 || imageData[i+2] > 0) {
-                    nonZeroPixels++;
-                }
-            }
-            console.log('QR scan (canvas fallback): frame has', nonZeroPixels, 'non-zero pixels in sample');
-
-            // Hand canvas directly to Nimiq scanner
-            QrScanner.scanImage(qrCanvas, { returnDetailedScanResult: true, alsoTryInverted: true })
-                .then((result) => {
-                    if (result && result.data) {
-                        console.log('QR code detected:', result.data);
-                        showToast(`QR: ${result.data}`);
-                        processQRCode(result.data);
-                    }
-                })
-                .catch((err) => {
-                    // Silently ignore "No QR code found" - it's expected when no code in frame
-                    // Only log unexpected errors
-                    if (err && err.message && !err.message.includes('No QR code found')) {
-                        console.warn('QR scan error:', err.message);
-                    }
-                })
-                .finally(() => {
-                    qrScanInProgress = false;
-                });
-        } catch (e) {
-            console.warn('QR scan error:', e);
-            qrScanInProgress = false;
-        }
-    }
-
-    async function scanForQRCodeFromXRFrame(frame) {
-        if (qrScanInProgress) return;
-        qrScanInProgress = true;
-
-        try {
-            // Try to get camera image data from XRFrame
-            if (!frame.getImageData) {
-                console.log('XRFrame.getImageData not available, falling back to canvas');
-                scanForQRCode();
-                return;
-            }
-
-            // Request camera image (format: 'rgba8' or 'rgb8')
-            let imageData;
-            try {
-                imageData = await frame.getImageData({
-                    format: 'rgba8'
-                });
-            } catch (e) {
-                // Try rgb8 if rgba8 fails
-                try {
-                    imageData = await frame.getImageData({
-                        format: 'rgb8'
-                    });
-                } catch (e2) {
-                    console.warn('Failed to get XR frame image data:', e2);
-                    scanForQRCode();
-                    return;
-                }
-            }
-
-            if (!imageData || !imageData.data) {
-                console.warn('No image data returned from XRFrame');
-                scanForQRCode();
-                return;
-            }
-
-            // Ensure we have a canvas to work with
-            if (!qrCanvas || !qrContext) {
-                qrScanInProgress = false;
-                return;
-            }
-
-            // Create temporary canvas for the camera data
-            const width = imageData.width;
-            const height = imageData.height;
-            qrCanvas.width = width;
-            qrCanvas.height = height;
-
-            // Draw image data directly to canvas
-            const imgDataObj = qrContext.createImageData(width, height);
-            imgDataObj.data.set(imageData.data);
-            qrContext.putImageData(imgDataObj, 0, 0);
-
-            console.log('QR scan (XR camera): scanning', width, 'x', height, 'camera frame');
-
-            // Hand canvas to Nimiq scanner
-            QrScanner.scanImage(qrCanvas, { returnDetailedScanResult: true, alsoTryInverted: true })
-                .then((result) => {
-                    if (result && result.data) {
-                        console.log('QR code detected (XR camera):', result.data);
-                        showToast(`QR: ${result.data}`);
-                        processQRCode(result.data);
-                    }
-                })
-                .catch((err) => {
-                    if (err && err.message && !err.message.includes('No QR code found')) {
-                        console.warn('QR scan error (XR camera):', err.message);
-                    }
-                })
-                .finally(() => {
-                    qrScanInProgress = false;
-                });
-
-        } catch (e) {
-            console.warn('XR camera QR scan error:', e);
-            qrScanInProgress = false;
-        }
-    }
-
-    function processQRCode(data) {
-        // Try to parse JSON from QR code
-        try {
-            const json = JSON.parse(data);
-            
-            // Check if it has lat, lon, alt properties
-            if (json.lat !== undefined && json.lon !== undefined && json.alt !== undefined) {
-                console.log('QR code contains GPS coordinates:', json);
-                
-                // Update geo origin with QR code values
-                geoOrigin = {
-                    lat: parseFloat(json.lat),
-                    lon: parseFloat(json.lon),
-                    alt: parseFloat(json.alt)
-                };
-                hasGeo = true;
-                
-                showToast(`GPS set from QR: ${geoOrigin.lat.toFixed(6)}, ${geoOrigin.lon.toFixed(6)}`);
-                updateHUD();
-                
-            }
-        } catch (e) {
-            // Not valid JSON or doesn't have required fields, ignore
-        }
-    }
 
     function computeImageHash(dataUrl) {
         // Simple perceptual hash using color histogram
@@ -825,19 +582,6 @@ var doLogout = function()
             if (!xrSessionStarted) {
                 xrSessionStarted = true;
                 initGeolocation();
-                
-                // Check if camera-access feature is available
-                if (session && session.enabledFeatures) {
-                    console.log('Enabled XR features:', session.enabledFeatures);
-                    if (session.enabledFeatures.includes('camera-access')) {
-                        xrCameraAccessAvailable = true;
-                        console.log('✓ XR camera access available');
-                    } else {
-                        console.warn('✗ camera-access feature NOT enabled (may not be supported on this platform)');
-                    }
-                } else {
-                    console.warn('No enabledFeatures available on session');
-                }
             }
 
             // Show drop button when AR session active
@@ -885,16 +629,6 @@ var doLogout = function()
         });
 
         renderer.render(scene, camera);
-
-        // Try QR scanning via XR camera texture if available, else fallback to canvas
-        if (xrSessionStarted && timestamp - lastQRScanTime > qrScanInterval) {
-            lastQRScanTime = timestamp;
-            if (xrCameraAccessAvailable && frame) {
-                scanForQRCodeFromXRFrame(frame);
-            } else {
-                scanForQRCode();
-            }
-        }
     }
 
     function onSessionEnded() {
