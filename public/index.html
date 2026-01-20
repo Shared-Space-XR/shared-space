@@ -292,9 +292,10 @@ var doLogout = function()
             canvas: myCanvas,
             antialias: true,
             alpha: true,
-            preserveDrawingBuffer: true // allow pixel reads for QR scanning and snapshots
+            preserveDrawingBuffer: true,
+            powerPreference: 'high-performance'
         });
-        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.setSize(width, height);
         renderer.xr.enabled = true;
 
@@ -609,22 +610,23 @@ var doLogout = function()
         cameraMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
         frustum.setFromProjectionMatrix(cameraMatrix);
         
-        // Capture camera snapshot for place recognition (every 30 frames to reduce cost)
-        if (frame && frame.getCounter && frame.getCounter() % 30 === 0) {
+        // Capture camera snapshot for place recognition (every 60 frames to reduce cost)
+        if (frame && frame.getCounter && frame.getCounter() % 60 === 0) {
             currentCameraSnapshot = captureCanvasSnapshot();
         }
         
         droppedObjects.forEach(drop => {
             if (drop.mesh) {
-                // Keep all objects visible permanently (persistent rendering)
                 drop.mesh.visible = true;
                 
-                // Orient badges toward camera
-                drop.mesh.traverse(child => {
-                    if (child.userData && child.userData.lookAtCamera) {
-                        child.lookAt(camera.position);
-                    }
-                });
+                // Only update badges for objects in frustum to reduce work
+                if (frustum.containsPoint(drop.mesh.position)) {
+                    drop.mesh.traverse(child => {
+                        if (child.userData && child.userData.lookAtCamera) {
+                            child.lookAt(camera.position);
+                        }
+                    });
+                }
             }
         });
 
