@@ -451,7 +451,7 @@ var doLogout = function()
             } else if (e.data.error) {
                 console.warn('QR worker error:', e.data.error);
             } else if (e.data.reason === 'no-code') {
-                // No code found; optional debug
+                // Optional: uncomment to debug
                 // console.log('QR worker: no code in frame');
             }
         };
@@ -579,15 +579,12 @@ var doLogout = function()
     function scanForQRCode() {
         // Scan the renderer canvas for QR codes using Web Worker (off render thread)
         if (qrScanInProgress) return;
-        if (!qrWorker) {
-            console.warn('QR scan skipped: worker not initialized');
-            return;
-        }
         
         try {
             if (!qrCanvas || !qrContext || !renderer) return;
             
             const canvas = renderer.domElement;
+            if (!canvas || !canvas.width || !canvas.height) return;
             qrCanvas.width = canvas.width;
             qrCanvas.height = canvas.height;
             
@@ -597,13 +594,29 @@ var doLogout = function()
             // Get image data for QR detection
             const imageData = qrContext.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
             
-            // Send to worker for processing (off main thread)
-            qrScanInProgress = true;
-            qrWorker.postMessage({
-                imageData: imageData.data.buffer,
-                width: imageData.width,
-                height: imageData.height
-            }, [imageData.data.buffer]); // Transfer buffer ownership for better performance
+            // Prefer worker; fall back to main thread if unavailable
+            if (qrWorker) {
+                qrScanInProgress = true;
+                qrWorker.postMessage({
+                    imageData: imageData.data.buffer,
+                    width: imageData.width,
+                    height: imageData.height
+                }, [imageData.data.buffer]); // Transfer buffer ownership for better performance
+            } else {
+                // Fallback: run jsQR on main thread
+                if (typeof jsQR !== 'undefined') {
+                    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                        inversionAttempts: "dontInvert",
+                    });
+                    if (code) {
+                        console.log('QR code detected (fallback):', code.data);
+                        showToast(`QR: ${code.data}`);
+                        processQRCode(code.data);
+                    }
+                } else {
+                    console.warn('QR scan skipped: worker not initialized and jsQR not available');
+                }
+            }
             
         } catch (e) {
             console.warn('QR scan error:', e);
