@@ -446,7 +446,7 @@ var doLogout = function()
             
             if (e.data.success) {
                 console.log('QR code detected:', e.data.data);
-                showToast('QR code scanned!');
+                showToast(`QR: ${e.data.data}`);
                 processQRCode(e.data.data);
             } else if (e.data.error) {
                 console.warn('QR worker error:', e.data.error);
