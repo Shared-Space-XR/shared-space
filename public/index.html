@@ -419,10 +419,10 @@ var doLogout = function()
                         self.postMessage({ success: false, error: 'jsQR not loaded' });
                         return;
                     }
-                    // Recreate typed array to be safe after transfer
-                    const data = new Uint8ClampedArray(imageData);
+                    // Recreate typed array to be safe after transfer/copy
+                    const data = imageData instanceof Uint8ClampedArray ? imageData : new Uint8ClampedArray(imageData);
                     const code = jsQR(data, width, height, {
-                        inversionAttempts: "dontInvert",
+                        inversionAttempts: "attemptBoth" // more robust for varied lighting/text
                     });
                     
                     if (code) {
@@ -598,15 +598,15 @@ var doLogout = function()
             if (qrWorker) {
                 qrScanInProgress = true;
                 qrWorker.postMessage({
-                    imageData: imageData.data.buffer,
+                    imageData: new Uint8ClampedArray(imageData.data), // copy, avoid transfer issues
                     width: imageData.width,
                     height: imageData.height
-                }, [imageData.data.buffer]); // Transfer buffer ownership for better performance
+                });
             } else {
                 // Fallback: run jsQR on main thread
                 if (typeof jsQR !== 'undefined') {
                     const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                        inversionAttempts: "dontInvert",
+                        inversionAttempts: "attemptBoth",
                     });
                     if (code) {
                         console.log('QR code detected (fallback):', code.data);
