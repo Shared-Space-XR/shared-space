@@ -282,11 +282,11 @@ var doLogout = function()
     let controller;
     let dropButton; // UI button for dropping objects
 
-    init().catch((e) => console.warn('Init failed:', e));
+    init();
     setupFurnitureSelection();
     animate();
 
-    async function init() {
+    function init() {
         let myCanvas = document.getElementById("canvas");
         const width = myCanvas.clientWidth || window.innerWidth;
         const height = myCanvas.clientHeight || window.innerHeight;
@@ -313,7 +313,6 @@ var doLogout = function()
         renderer.setSize(width, height);
         renderer.xr.enabled = true;
 
-
         // Don't add the XREstimatedLight to the scene initially
         // It doesn't have any estimated lighting values until an AR session starts
         const xrLight = new XREstimatedLight(renderer);
@@ -336,18 +335,25 @@ var doLogout = function()
             // scene.environment =
         });
 
-        // Ask for camera permission up front; stop tracks immediately to free camera for XR
-        await requestCameraPermission();
+        // Ask for camera permission up front; on success start QR video scanner, then show AR button
+        requestCameraPermission()
+            .then(() => {
+                startQRVideoScannerWithTimeout();
 
-        let arButton = ARButton.createButton(renderer, {
-            requiredFeatures: ["dom-overlay"],
-            optionalFeatures: ["light-estimation"],
-            domOverlay: { root: document.body },
-        });
-        arButton.style.bottom = "calc(100vh - 150px)";
-        arButton.style.left = "10px!important";
-        arButton.style.marginLeft = "0px";
-        document.body.appendChild(arButton);
+                let arButton = ARButton.createButton(renderer, {
+                    requiredFeatures: ["dom-overlay"],
+                    optionalFeatures: ["light-estimation"],
+                    domOverlay: { root: document.body },
+                });
+                arButton.style.bottom = "calc(100vh - 150px)";
+                arButton.style.left = "10px!important";
+                arButton.style.marginLeft = "0px";
+                document.body.appendChild(arButton);
+            })
+            .catch((e) => {
+                console.warn('Camera permission denied or failed:', e);
+                showToast('Camera permission is required for AR');
+            });
 
         for (let i = 0; i < models.length; i++) {
             const loader = new GLTFLoader();
@@ -545,7 +551,6 @@ var doLogout = function()
     }
 
     async function startQRVideoScannerWithTimeout(timeoutMs = 3000) {
-        if (!xrSessionStarted) return;
         if (qrScannerReady || qrScannerStarting || qrScannerFailed) return;
         if (!qrVideo) qrVideo = document.getElementById('qr-video');
         if (!qrVideo) {
