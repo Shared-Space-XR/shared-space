@@ -301,6 +301,7 @@ var doLogout = function()
             canvas: myCanvas,
             antialias: true,
             alpha: true,
+            preserveDrawingBuffer: true // allow pixel reads for QR scanning and snapshots
         });
         renderer.setPixelRatio(window.devicePixelRatio);
         renderer.setSize(width, height);
