@@ -827,9 +827,16 @@ var doLogout = function()
                 initGeolocation();
                 
                 // Check if camera-access feature is available
-                if (session && session.enabledFeatures && session.enabledFeatures.includes('camera-access')) {
-                    xrCameraAccessAvailable = true;
-                    console.log('XR camera access available');
+                if (session && session.enabledFeatures) {
+                    console.log('Enabled XR features:', session.enabledFeatures);
+                    if (session.enabledFeatures.includes('camera-access')) {
+                        xrCameraAccessAvailable = true;
+                        console.log('✓ XR camera access available');
+                    } else {
+                        console.warn('✗ camera-access feature NOT enabled (may not be supported on this platform)');
+                    }
+                } else {
+                    console.warn('No enabledFeatures available on session');
                 }
             }
 
