@@ -415,21 +415,23 @@ var doLogout = function()
                 const { imageData, width, height } = e.data;
                 
                 try {
-                    if (typeof jsQR !== 'undefined') {
-                        const code = jsQR(imageData, width, height, {
-                            inversionAttempts: "dontInvert",
-                        });
-                        
-                        if (code) {
-                            self.postMessage({ success: true, data: code.data });
-                        } else {
-                            self.postMessage({ success: false });
-                        }
-                    } else {
+                    if (typeof jsQR === 'undefined') {
                         self.postMessage({ success: false, error: 'jsQR not loaded' });
+                        return;
+                    }
+                    // Recreate typed array to be safe after transfer
+                    const data = new Uint8ClampedArray(imageData);
+                    const code = jsQR(data, width, height, {
+                        inversionAttempts: "dontInvert",
+                    });
+                    
+                    if (code) {
+                        self.postMessage({ success: true, data: code.data });
+                    } else {
+                        self.postMessage({ success: false, reason: 'no-code' });
                     }
                 } catch (error) {
-                    self.postMessage({ success: false, error: error.message });
+                    self.postMessage({ success: false, error: error.message || String(error) });
                 }
             };
         `;
@@ -448,6 +450,9 @@ var doLogout = function()
                 processQRCode(e.data.data);
             } else if (e.data.error) {
                 console.warn('QR worker error:', e.data.error);
+            } else if (e.data.reason === 'no-code') {
+                // No code found; optional debug
+                // console.log('QR worker: no code in frame');
             }
         };
         
@@ -573,7 +578,11 @@ var doLogout = function()
 
     function scanForQRCode() {
         // Scan the renderer canvas for QR codes using Web Worker (off render thread)
-        if (qrScanInProgress || !qrWorker) return;
+        if (qrScanInProgress) return;
+        if (!qrWorker) {
+            console.warn('QR scan skipped: worker not initialized');
+            return;
+        }
         
         try {
             if (!qrCanvas || !qrContext || !renderer) return;
@@ -591,7 +600,7 @@ var doLogout = function()
             // Send to worker for processing (off main thread)
             qrScanInProgress = true;
             qrWorker.postMessage({
-                imageData: imageData.data,
+                imageData: imageData.data.buffer,
                 width: imageData.width,
                 height: imageData.height
             }, [imageData.data.buffer]); // Transfer buffer ownership for better performance
