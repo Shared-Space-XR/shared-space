@@ -625,8 +625,10 @@ var doLogout = function()
                     }
                 })
                 .catch((err) => {
-                    if (!err?.message || !err.message.includes('No QR code found')) {
-                        console.warn('QR scan error:', err?.message || err);
+                    // Silently ignore "No QR code found" - it's expected when no code in frame
+                    // Only log unexpected errors
+                    if (err && err.message && !err.message.includes('No QR code found')) {
+                        console.warn('QR scan error:', err.message);
                     }
                 })
                 .finally(() => {
