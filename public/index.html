@@ -202,9 +202,18 @@ var doLogout = function()
         <div class="status-line"><span class="label">Heading:</span><span id="hud-heading">—</span></div>
         <div class="status-line"><span class="label">Last Drop:</span><span id="hud-last">—</span></div>
         <button id="toggle-planes">Show Surfaces</button>
+        <button id="calibrate-gps" style="margin-top: 8px; padding: 6px 10px; background: rgba(100, 200, 255, 0.6); color: white; border: none; border-radius: 4px; font-size: 11px; cursor: pointer;">Calibrate GPS</button>
     </div>
 
     <button id="toggle-viz">Map</button>
+    <div id="calibration-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 10000; flex-direction: column; justify-content: center; align-items: center;">
+        <div style="color: white; text-align: center; margin-bottom: 20px;">
+            <h2 style="margin: 0 0 10px 0; font-size: 20px;">Scan GPS Calibration Code</h2>
+            <p style="font-size: 14px; color: #aaa; margin: 0;">Point camera at QR code to calibrate GPS origin</p>
+        </div>
+        <video id="calibration-video" style="width: 90%; max-width: 400px; border-radius: 8px; margin-bottom: 20px;"></video>
+        <button id="calibration-cancel" style="padding: 10px 20px; background: rgba(255,100,100,0.8); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">Cancel</button>
+    </div>
     <div id="viz-iframe-container">
         <iframe id="viz-iframe" src="viz.html"></iframe>
     </div>
@@ -226,6 +235,8 @@ var doLogout = function()
     import { ARButton } from 'https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/ARButton.js';
     import { GLTFLoader } from "https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/GLTFLoader.js";
     import { XREstimatedLight } from "https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/XREstimatedLight.js";
+    import QrScanner from 'https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.min.js';
+    QrScanner.WORKER_PATH = 'https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner-worker.min.js';
 
     let reticle;
     let scene, camera, renderer;
@@ -251,6 +262,8 @@ var doLogout = function()
     let cameraMatrix = new THREE.Matrix4();
     let showSurfacePlanes = false; // Toggle for surface visualization
     let anchorSupported = false; // Track if WebXR anchors are available
+    let qrCalibrationActive = false; // QR calibration mode active
+    let calibrationScanner = null; // QR scanner for GPS calibration
 
     let models = [
         "./glbs/dylan_armchair_yolk_yellow.glb",
@@ -383,6 +396,10 @@ var doLogout = function()
 
         // Setup surface plane toggle
         document.getElementById('toggle-planes').addEventListener('click', toggleSurfacePlanes);
+        
+        // Setup GPS calibration button
+        document.getElementById('calibrate-gps').addEventListener('click', startGPSCalibration);
+        document.getElementById('calibration-cancel').addEventListener('click', stopGPSCalibration);
         
         // Setup viz iframe toggle
         document.getElementById('toggle-viz').addEventListener('click', toggleVizIframe);
@@ -1204,6 +1221,137 @@ var doLogout = function()
                         child.visible = showSurfacePlanes;
                     }
                 });
+            }
+        });
+    }
+
+    async function startGPSCalibration() {
+        if (qrCalibrationActive || !xrSessionStarted) return;
+        qrCalibrationActive = true;
+        
+        const modal = document.getElementById('calibration-modal');
+        const video = document.getElementById('calibration-video');
+        modal.style.display = 'flex';
+        
+        try {
+            calibrationScanner = new QrScanner(
+                video,
+                (result) => {
+                    if (result && result.data) {
+                        handleCalibrationQRCode(result.data);
+                    }
+                },
+                {
+                    preferredCamera: 'environment',
+                    maxScansPerSecond: 6,
+                    returnDetailedScanResult: true,
+                    alsoTryInverted: true
+                }
+            );
+            
+            await calibrationScanner.start();
+            console.log('GPS calibration scanner started');
+        } catch (e) {
+            console.warn('Failed to start calibration scanner:', e);
+            showToast('Camera access denied');
+            stopGPSCalibration();
+        }
+    }
+    
+    function stopGPSCalibration() {
+        qrCalibrationActive = false;
+        const modal = document.getElementById('calibration-modal');
+        modal.style.display = 'none';
+        
+        if (calibrationScanner) {
+            calibrationScanner.stop();
+            calibrationScanner.destroy();
+            calibrationScanner = null;
+        }
+    }
+    
+    function handleCalibrationQRCode(data) {
+        try {
+            const json = JSON.parse(data);
+            
+            // Check if it has lat, lon, alt properties
+            if (json.lat !== undefined && json.lon !== undefined && json.alt !== undefined) {
+                console.log('GPS calibration from QR:', json);
+                
+                // Store old origin for offset calculation
+                const oldOrigin = geoOrigin || { lat: 0, lon: 0, alt: 0 };
+                
+                // Update geo origin with QR code values
+                geoOrigin = {
+                    lat: parseFloat(json.lat),
+                    lon: parseFloat(json.lon),
+                    alt: parseFloat(json.alt)
+                };
+                hasGeo = true;
+                
+                // Recalculate all dropped objects' GPS coordinates
+                recalibrateAllObjects(oldOrigin, geoOrigin);
+                
+                showToast(`GPS calibrated: ${geoOrigin.lat.toFixed(6)}, ${geoOrigin.lon.toFixed(6)}`);
+                updateHUD();
+                stopGPSCalibration();
+            } else {
+                showToast('QR code missing GPS data (need lat, lon, alt)');
+            }
+        } catch (e) {
+            console.warn('Invalid QR data for calibration:', e);
+            showToast('Invalid GPS QR code format');
+        }
+    }
+    
+    function recalibrateAllObjects(oldOrigin, newOrigin) {
+        // When GPS origin changes, update all object GPS coordinates
+        // Objects stay in same visual position but GPS values update
+        
+        const R = 6378137; // WGS84 Earth radius
+        const lat0_old = oldOrigin.lat * Math.PI / 180.0;
+        const lon0_old = oldOrigin.lon * Math.PI / 180.0;
+        const lat0_new = newOrigin.lat * Math.PI / 180.0;
+        const lon0_new = newOrigin.lon * Math.PI / 180.0;
+        
+        droppedObjects.forEach(drop => {
+            if (drop.mesh && drop.lat !== null && drop.lon !== null) {
+                // Convert object's GPS back to local XR coordinates relative to old origin
+                const lat = drop.lat * Math.PI / 180.0;
+                const lon = drop.lon * Math.PI / 180.0;
+                
+                let north_old = (lat - lat0_old) * R;
+                let east_old = (lon - lon0_old) * R * Math.cos(lat0_old);
+                
+                // Apply inverse heading rotation to get absolute local coords
+                if (typeof headingDeg === 'number') {
+                    const h = headingDeg * Math.PI / 180.0;
+                    const cosH = Math.cos(-h);
+                    const sinH = Math.sin(-h);
+                    const e = east_old, n = north_old;
+                    east_old = e * cosH - n * sinH;
+                    north_old = e * sinH + n * cosH;
+                }
+                
+                // Convert absolute local coords to new GPS relative to new origin
+                let east_new = east_old;
+                let north_new = north_old;
+                if (typeof headingDeg === 'number') {
+                    const h = headingDeg * Math.PI / 180.0;
+                    const cosH = Math.cos(h);
+                    const sinH = Math.sin(h);
+                    const e = east_new, n = north_new;
+                    east_new = e * cosH - n * sinH;
+                    north_new = e * sinH + n * cosH;
+                }
+                
+                const dLat = north_new / R;
+                const dLon = east_new / (R * Math.cos(lat0_new));
+                drop.lat = newOrigin.lat + (dLat * 180.0 / Math.PI);
+                drop.lon = newOrigin.lon + (dLon * 180.0 / Math.PI);
+                drop.alt = newOrigin.alt + (drop.mesh.position.y || 0);
+                
+                console.log('Recalibrated object GPS:', drop.lat.toFixed(6), drop.lon.toFixed(6));
             }
         });
     }
