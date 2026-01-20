@@ -222,12 +222,13 @@ var doLogout = function()
         <img class="button-image" id="item5" src="pngs/nesting-tables.png" />
     </div>
 </body>
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script type="module">
     import * as THREE from 'https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/three.module.js';
     import { ARButton } from 'https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/ARButton.js';
     import { GLTFLoader } from "https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/GLTFLoader.js";
     import { XREstimatedLight } from "https://cdn.jsdelivr.net/gh/mesquite-mocap/mesquite.cc/build-static/XREstimatedLight.js";
+    import QrScanner from 'https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.min.js';
+    QrScanner.WORKER_PATH = 'https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner-worker.min.js';
 
     let reticle;
     let scene, camera, renderer;
@@ -247,7 +248,6 @@ var doLogout = function()
     let qrContext = null;
     let lastQRScanTime = 0;
     let qrScanInterval = 3000; // Scan every 3 seconds to reduce load
-    let qrWorker = null; // Web Worker for off-thread QR scanning
     let qrScanInProgress = false; // Prevent concurrent scans
     
     // Visual place recognition state
@@ -400,67 +400,8 @@ var doLogout = function()
         qrCanvas = document.getElementById('qr-canvas');
         qrContext = qrCanvas.getContext('2d');
         
-        // Initialize QR scanning Web Worker for off-thread processing
-        initQRWorker();
-        
         // Handle window resize to fix glitchy rendering
         window.addEventListener('resize', onWindowResize, false);
-    }
-    
-    function initQRWorker() {
-        // Create inline Web Worker for QR scanning to offload from render thread
-        const workerCode = `
-            importScripts('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js');
-            
-            self.onmessage = function(e) {
-                const { imageData, width, height } = e.data;
-                
-                try {
-                    if (typeof jsQR === 'undefined') {
-                        self.postMessage({ success: false, error: 'jsQR not loaded' });
-                        return;
-                    }
-                    // Recreate typed array to be safe after transfer/copy
-                    const data = imageData instanceof Uint8ClampedArray ? imageData : new Uint8ClampedArray(imageData);
-                    const code = jsQR(data, width, height, {
-                        inversionAttempts: "attemptBoth" // more robust for varied lighting/text
-                    });
-                    
-                    if (code) {
-                        self.postMessage({ success: true, data: code.data });
-                    } else {
-                        self.postMessage({ success: false, reason: 'no-code' });
-                    }
-                } catch (error) {
-                    self.postMessage({ success: false, error: error.message || String(error) });
-                }
-            };
-        `;
-        
-        const blob = new Blob([workerCode], { type: 'application/javascript' });
-        const workerUrl = URL.createObjectURL(blob);
-        qrWorker = new Worker(workerUrl);
-        
-        // Handle worker responses
-        qrWorker.onmessage = function(e) {
-            qrScanInProgress = false;
-            
-            if (e.data.success) {
-                console.log('QR code detected:', e.data.data);
-                showToast(`QR: ${e.data.data}`);
-                processQRCode(e.data.data);
-            } else if (e.data.error) {
-                console.warn('QR worker error:', e.data.error);
-            } else if (e.data.reason === 'no-code') {
-                // Optional: uncomment to debug
-                // console.log('QR worker: no code in frame');
-            }
-        };
-        
-        qrWorker.onerror = function(error) {
-            console.warn('QR worker failed:', error);
-            qrScanInProgress = false;
-        };
     }
     
     function onWindowResize() {
@@ -578,7 +519,6 @@ var doLogout = function()
     }
 
     function scanForQRCode() {
-        // Scan the renderer canvas for QR codes using Web Worker (off render thread)
         if (qrScanInProgress) return;
         
         try {
@@ -595,29 +535,25 @@ var doLogout = function()
             // Get image data for QR detection
             const imageData = qrContext.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
             
-            // Prefer worker; fall back to main thread if unavailable
-            if (qrWorker) {
-                qrScanInProgress = true;
-                qrWorker.postMessage({
-                    imageData: new Uint8ClampedArray(imageData.data), // copy, avoid transfer issues
-                    width: imageData.width,
-                    height: imageData.height
-                });
-            } else {
-                // Fallback: run jsQR on main thread
-                if (typeof jsQR !== 'undefined') {
-                    const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                        inversionAttempts: "attemptBoth",
-                    });
-                    if (code) {
-                        console.log('QR code detected (fallback):', code.data);
-                        showToast(`QR: ${code.data}`);
-                        processQRCode(code.data);
+            // Use Nimiq QR Scanner (runs in its own worker internally)
+            qrScanInProgress = true;
+            QrScanner.scanImage(imageData, { returnDetailedScanResult: true })
+                .then((result) => {
+                    if (result && result.data) {
+                        console.log('QR code detected:', result.data);
+                        showToast(`QR: ${result.data}`);
+                        processQRCode(result.data);
                     }
-                } else {
-                    console.warn('QR scan skipped: worker not initialized and jsQR not available');
-                }
-            }
+                })
+                .catch((err) => {
+                    // Ignore "No QR code found" noise; log other errors
+                    if (err && err.message && err.message.indexOf('No QR code found') === -1) {
+                        console.warn('QR scan error:', err.message || err);
+                    }
+                })
+                .finally(() => {
+                    qrScanInProgress = false;
+                });
             
         } catch (e) {
             console.warn('QR scan error:', e);
