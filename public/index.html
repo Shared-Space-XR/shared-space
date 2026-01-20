@@ -398,7 +398,7 @@ var doLogout = function()
         
         // Setup QR scanner canvas (uses XR-rendered frame, no extra camera stream)
         qrCanvas = document.getElementById('qr-canvas');
-        qrContext = qrCanvas.getContext('2d');
+        qrContext = qrCanvas.getContext('2d', { willReadFrequently: true });
         
         // Handle window resize to fix glitchy rendering
         window.addEventListener('resize', onWindowResize, false);
@@ -534,17 +534,18 @@ var doLogout = function()
                 return;
             }
 
-            // Resize QR canvas to match current render size
-            qrCanvas.width = canvas.width;
-            qrCanvas.height = canvas.height;
+            // Downscale for cheaper QR decode and to match expected input
+            const targetWidth = Math.min(640, canvas.width || 640);
+            const scale = targetWidth / (canvas.width || targetWidth);
+            const targetHeight = Math.floor((canvas.height || targetWidth) * scale);
+            qrCanvas.width = targetWidth;
+            qrCanvas.height = targetHeight;
 
-            // Copy current XR frame (camera + virtual) to 2D context
-            qrContext.drawImage(canvas, 0, 0, qrCanvas.width, qrCanvas.height);
+            // Copy current XR frame (camera + virtual) to 2D context at reduced size
+            qrContext.drawImage(canvas, 0, 0, targetWidth, targetHeight);
 
-            // Read pixel data and hand to Nimiq QR scanner (runs in its own worker)
-            const imageData = qrContext.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
-
-            QrScanner.scanImage(imageData, { returnDetailedScanResult: true })
+            // Hand canvas directly to Nimiq scanner to avoid ImageData type issues
+            QrScanner.scanImage(qrCanvas, { returnDetailedScanResult: true })
                 .then((result) => {
                     if (result && result.data) {
                         console.log('QR code detected:', result.data);
