@@ -535,7 +535,7 @@ var doLogout = function()
             }
 
             // Downscale for cheaper QR decode and to match expected input
-            const targetWidth = Math.min(640, canvas.width || 640);
+            const targetWidth = Math.min(960, canvas.width || 960);
             const scale = targetWidth / (canvas.width || targetWidth);
             const targetHeight = Math.floor((canvas.height || targetWidth) * scale);
             qrCanvas.width = targetWidth;
@@ -544,8 +544,20 @@ var doLogout = function()
             // Copy current XR frame (camera + virtual) to 2D context at reduced size
             qrContext.drawImage(canvas, 0, 0, targetWidth, targetHeight);
 
+            // Quick luminance sample to detect empty/transparent frames (debug aid)
+            const sample = qrContext.getImageData(0, 0, Math.min(32, targetWidth), Math.min(32, targetHeight)).data;
+            let sum = 0;
+            for (let i = 0; i < sample.length; i += 4) {
+                sum += sample[i] + sample[i + 1] + sample[i + 2];
+            }
+            if (sum < 1000) {
+                console.warn('QR scan skipped: frame appears empty');
+                qrScanInProgress = false;
+                return;
+            }
+
             // Hand canvas directly to Nimiq scanner to avoid ImageData type issues
-            QrScanner.scanImage(qrCanvas, { returnDetailedScanResult: true })
+            QrScanner.scanImage(qrCanvas, { returnDetailedScanResult: true, alsoTryInverted: true })
                 .then((result) => {
                     if (result && result.data) {
                         console.log('QR code detected:', result.data);
@@ -684,11 +696,6 @@ var doLogout = function()
             reticle.position.copy(reticlePos);
             reticle.visible = true;
             
-            // Passive QR scan from XR canvas (no extra camera stream)
-            if (timestamp - lastQRScanTime > qrScanInterval) {
-                lastQRScanTime = timestamp;
-                scanForQRCode();
-            }
         }
 
         // Update frustum culling for dropped objects
@@ -716,6 +723,12 @@ var doLogout = function()
         });
 
         renderer.render(scene, camera);
+
+        // Passive QR scan from XR canvas (no extra camera stream)
+        if (timestamp - lastQRScanTime > qrScanInterval) {
+            lastQRScanTime = timestamp;
+            scanForQRCode();
+        }
     }
 
     function onSessionEnded() {
