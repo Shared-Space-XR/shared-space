@@ -246,10 +246,11 @@ var doLogout = function()
     let placeRecognitionEnabled = true; // Toggle for feature matching
 
     // Dropped objects from server
-    let droppedObjects = new Map(); // Map of dropId -> {id, lat, lon, alt, mesh}
+    let droppedObjects = new Map(); // Map of dropId -> {id, lat, lon, alt, mesh, anchor, anchorId}
     let frustum = new THREE.Frustum();
     let cameraMatrix = new THREE.Matrix4();
     let showSurfacePlanes = false; // Toggle for surface visualization
+    let anchorSupported = false; // Track if WebXR anchors are available
 
     let models = [
         "./glbs/dylan_armchair_yolk_yellow.glb",
@@ -427,14 +428,37 @@ var doLogout = function()
             
             // Track in droppedObjects with temporary ID to prevent duplication
             const tempId = 'temp_' + Date.now();
-            droppedObjects.set(tempId, {
+            const dropEntry = {
                 id: tempId,
                 lat: null,
                 lon: null,
                 alt: null,
                 mesh: newModel,
-                temporary: true
-            });
+                temporary: true,
+                anchor: null,
+                anchorId: null
+            };
+            droppedObjects.set(tempId, dropEntry);
+
+            // Try to create WebXR anchor at drop location
+            if (anchorSupported && renderer.xr.getSession) {
+                const session = renderer.xr.getSession();
+                if (session && frame) {
+                    const rigidTransform = new XRRigidTransform(
+                        { x: newModel.position.x, y: newModel.position.y, z: newModel.position.z }
+                    );
+                    session.createAnchor(rigidTransform, frame.createXRRigidTransform ? frame : new XRRigidTransform())
+                        .then(anchor => {
+                            dropEntry.anchor = anchor;
+                            dropEntry.anchorId = anchor.uuid || ('anchor_' + Date.now());
+                            console.log('Anchor created for drop:', dropEntry.anchorId);
+                        })
+                        .catch(err => {
+                            console.warn('Failed to create anchor:', err);
+                            // Anchor creation failed, will use GPS fallback
+                        });
+                }
+            }
 
             // Convert local XR position to GPS
             const worldPos = newModel.position.clone();
@@ -452,7 +476,7 @@ var doLogout = function()
                 const dropSnapshot = captureCanvasSnapshot();
                 console.log('Camera snapshot captured:', dropSnapshot ? 'YES' : 'NO');
                 
-                // Persist to backend
+                // Persist to backend with anchor info
                 persistCoordinates({
                     modelIndex: itemSelectedIndex,
                     lat: approxGeo.lat,
@@ -461,7 +485,8 @@ var doLogout = function()
                     localPos: { x: worldPos.x, y: worldPos.y, z: worldPos.z },
                     quaternion: { x: newModel.quaternion.x, y: newModel.quaternion.y, z: newModel.quaternion.z, w: newModel.quaternion.w },
                     cameraSnapshot: dropSnapshot,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    anchorId: droppedObjects.get(tempId)?.anchorId || null
                 }, tempId);
             } else {
                 showToast('GPS not available; showing local placement only');
@@ -584,6 +609,14 @@ var doLogout = function()
             if (!xrSessionStarted) {
                 xrSessionStarted = true;
                 initGeolocation();
+                
+                // Check if WebXR anchors are supported
+                if (session && typeof session.createAnchor === 'function') {
+                    anchorSupported = true;
+                    console.log('✓ WebXR anchors supported');
+                } else {
+                    console.log('⚠ WebXR anchors not supported, using GPS only');
+                }
             }
 
             // Show drop button when AR session active
@@ -622,6 +655,17 @@ var doLogout = function()
         droppedObjects.forEach(drop => {
             if (drop.mesh) {
                 drop.mesh.visible = true;
+                
+                // Update position from anchor if available and valid
+                if (drop.anchor && frame) {
+                    const anchorSpace = frame.getPose?.(drop.anchor.anchorSpace, frame.referenceSpace);
+                    if (anchorSpace) {
+                        const mat = anchorSpace.transform.matrix;
+                        drop.mesh.position.setFromMatrixPosition(
+                            new THREE.Matrix4().fromArray(mat)
+                        );
+                    }
+                }
                 
                 // Only update badges for objects in frustum to reduce work
                 if (frustum.containsPoint(drop.mesh.position)) {
@@ -882,15 +926,25 @@ var doLogout = function()
             const marker = createDropMarker(item, null, null);
             if (marker) {
                 scene.add(marker);
-                droppedObjects.set(dropId, {
+                const dropEntry = {
                     id: dropId,
                     lat: item.lat,
                     lon: item.lon,
                     alt: item.alt,
                     mesh: marker,
                     matchConfidence: null,
-                    placeRecognitionConfidence: 0
-                });
+                    placeRecognitionConfidence: 0,
+                    anchor: null,
+                    anchorId: item.anchorId || null
+                };
+                droppedObjects.set(dropId, dropEntry);
+                
+                // Try to restore anchor from server data if available
+                if (item.anchorId && anchorSupported && renderer.xr.getSession) {
+                    // Note: Anchors cannot be restored across sessions by UUID
+                    // Use GPS position for now, but store anchorId for future use
+                    console.log('Drop has anchor ID (local-session only):', item.anchorId);
+                }
             }
         });
     }
