@@ -606,6 +606,8 @@ var doLogout = function()
             qrScanInProgress = false;
             return;
         }
+        // Skip canvas scans if video scanner is running; let video handle continuous scanning
+        if (qrScannerReady || qrScannerStarting) return;
         if (qrScanInProgress) return;
         qrScanInProgress = true;
 
