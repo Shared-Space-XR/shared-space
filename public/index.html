@@ -246,7 +246,9 @@ var doLogout = function()
     let qrCanvas = null;
     let qrContext = null;
     let lastQRScanTime = 0;
-    let qrScanInterval = 1000; // Scan every 1 second
+    let qrScanInterval = 3000; // Scan every 3 seconds to reduce load
+    let qrWorker = null; // Web Worker for off-thread QR scanning
+    let qrScanInProgress = false; // Prevent concurrent scans
     
     // Visual place recognition state
     let currentCameraSnapshot = null; // Current frame texture for feature matching
@@ -397,8 +399,62 @@ var doLogout = function()
         qrCanvas = document.getElementById('qr-canvas');
         qrContext = qrCanvas.getContext('2d');
         
+        // Initialize QR scanning Web Worker for off-thread processing
+        initQRWorker();
+        
         // Handle window resize to fix glitchy rendering
         window.addEventListener('resize', onWindowResize, false);
+    }
+    
+    function initQRWorker() {
+        // Create inline Web Worker for QR scanning to offload from render thread
+        const workerCode = `
+            importScripts('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js');
+            
+            self.onmessage = function(e) {
+                const { imageData, width, height } = e.data;
+                
+                try {
+                    if (typeof jsQR !== 'undefined') {
+                        const code = jsQR(imageData, width, height, {
+                            inversionAttempts: "dontInvert",
+                        });
+                        
+                        if (code) {
+                            self.postMessage({ success: true, data: code.data });
+                        } else {
+                            self.postMessage({ success: false });
+                        }
+                    } else {
+                        self.postMessage({ success: false, error: 'jsQR not loaded' });
+                    }
+                } catch (error) {
+                    self.postMessage({ success: false, error: error.message });
+                }
+            };
+        `;
+        
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(blob);
+        qrWorker = new Worker(workerUrl);
+        
+        // Handle worker responses
+        qrWorker.onmessage = function(e) {
+            qrScanInProgress = false;
+            
+            if (e.data.success) {
+                console.log('QR code detected:', e.data.data);
+                showToast('QR code scanned!');
+                processQRCode(e.data.data);
+            } else if (e.data.error) {
+                console.warn('QR worker error:', e.data.error);
+            }
+        };
+        
+        qrWorker.onerror = function(error) {
+            console.warn('QR worker failed:', error);
+            qrScanInProgress = false;
+        };
     }
     
     function onWindowResize() {
@@ -516,7 +572,9 @@ var doLogout = function()
     }
 
     function scanForQRCode() {
-        // Scan the renderer canvas for QR codes passively during XR session
+        // Scan the renderer canvas for QR codes using Web Worker (off render thread)
+        if (qrScanInProgress || !qrWorker) return;
+        
         try {
             if (!qrCanvas || !qrContext || !renderer) return;
             
@@ -530,20 +588,17 @@ var doLogout = function()
             // Get image data for QR detection
             const imageData = qrContext.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
             
-            // Scan for QR code using jsQR
-            if (typeof jsQR !== 'undefined') {
-                const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                    inversionAttempts: "dontInvert",
-                });
-                
-                if (code) {
-                    console.log('QR code detected:', code.data);
-                    showToast('QR code scanned!');
-                    processQRCode(code.data);
-                }
-            }
+            // Send to worker for processing (off main thread)
+            qrScanInProgress = true;
+            qrWorker.postMessage({
+                imageData: imageData.data,
+                width: imageData.width,
+                height: imageData.height
+            }, [imageData.data.buffer]); // Transfer buffer ownership for better performance
+            
         } catch (e) {
             console.warn('QR scan error:', e);
+            qrScanInProgress = false;
         }
     }
 
@@ -678,8 +733,8 @@ var doLogout = function()
         cameraMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
         frustum.setFromProjectionMatrix(cameraMatrix);
         
-        // Capture camera snapshot for place recognition (every 10 frames to reduce cost)
-        if (frame && frame.getCounter && frame.getCounter() % 10 === 0) {
+        // Capture camera snapshot for place recognition (every 30 frames to reduce cost)
+        if (frame && frame.getCounter && frame.getCounter() % 30 === 0) {
             currentCameraSnapshot = captureCanvasSnapshot();
         }
         
@@ -882,11 +937,36 @@ var doLogout = function()
             // Remove temporary entries that now exist in server data
             if (drop.temporary) {
                 // Check if any incoming item matches this position (within 1m)
+                // Use direct GPS calculation instead of creating full meshes
                 const matchesExisting = items.some(item => {
                     if (!drop.mesh || !item.lat || !item.lon) return false;
-                    const marker = createDropMarker(item, null, null);
-                    if (!marker) return false;
-                    const distance = drop.mesh.position.distanceTo(marker.position);
+                    
+                    // Calculate expected position without creating mesh
+                    if (!geoOrigin) return false;
+                    const R = 6378137;
+                    const lat0 = geoOrigin.lat * Math.PI / 180.0;
+                    const lon0 = geoOrigin.lon * Math.PI / 180.0;
+                    const lat = item.lat * Math.PI / 180.0;
+                    const lon = item.lon * Math.PI / 180.0;
+                    
+                    let north = (lat - lat0) * R;
+                    let east = (lon - lon0) * R * Math.cos(lat0);
+                    
+                    if (typeof headingDeg === 'number') {
+                        const h = headingDeg * Math.PI / 180.0;
+                        const cosH = Math.cos(-h);
+                        const sinH = Math.sin(-h);
+                        const e = east, n = north;
+                        east = e * cosH - n * sinH;
+                        north = e * sinH + n * cosH;
+                    }
+                    
+                    const y = item.localPos?.y || -1.5;
+                    const dx = drop.mesh.position.x - east;
+                    const dy = drop.mesh.position.y - y;
+                    const dz = drop.mesh.position.z - north;
+                    const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    
                     return distance < 1; // Within 1 meter
                 });
                 if (matchesExisting) {
