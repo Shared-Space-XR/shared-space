@@ -213,7 +213,6 @@ var doLogout = function()
 
     <canvas id="canvas"></canvas>
     <canvas id="qr-canvas" style="display:none;"></canvas>
-    <video id="qr-video" autoplay muted playsinline style="display:none;"></video>
     <div class="navbar">
         <img class="button-image" id="item0" src="pngs/armchair.png" />
         <img class="button-image" id="item1" src="pngs/lounger.png" />
@@ -244,14 +243,9 @@ var doLogout = function()
     let xrSessionStarted = false; // Track if XR session has started
     let geoWatchId = null; // Store GPS watch ID so we can stop it after XR starts
     
-    // QR code scanning state (canvas fallback; optional video scanner if available)
+    // QR code scanning state (uses XR camera via preserveDrawingBuffer)
     let qrCanvas = null;
     let qrContext = null;
-    let qrVideo = null;
-    let qrScanner = null;
-    let qrScannerReady = false;
-    let qrScannerStarting = false;
-    let qrScannerFailed = false;
     let lastQRScanTime = 0;
     let qrScanInterval = 1500; // ms between scans
     let qrScanInProgress = false; // Prevent concurrent scans
@@ -335,25 +329,16 @@ var doLogout = function()
             // scene.environment =
         });
 
-        // Ask for camera permission up front; on success start QR video scanner, then show AR button
-        requestCameraPermission()
-            .then(() => {
-                startQRVideoScannerWithTimeout();
-
-                let arButton = ARButton.createButton(renderer, {
-                    requiredFeatures: ["dom-overlay"],
-                    optionalFeatures: ["light-estimation"],
-                    domOverlay: { root: document.body },
-                });
-                arButton.style.bottom = "calc(100vh - 150px)";
-                arButton.style.left = "10px!important";
-                arButton.style.marginLeft = "0px";
-                document.body.appendChild(arButton);
-            })
-            .catch((e) => {
-                console.warn('Camera permission denied or failed:', e);
-                showToast('Camera permission is required for AR');
-            });
+        // Create AR button (camera permission handled by XR session)
+        let arButton = ARButton.createButton(renderer, {
+            requiredFeatures: ["dom-overlay"],
+            optionalFeatures: ["light-estimation"],
+            domOverlay: { root: document.body },
+        });
+        arButton.style.bottom = "calc(100vh - 150px)";
+        arButton.style.left = "10px!important";
+        arButton.style.marginLeft = "0px";
+        document.body.appendChild(arButton);
 
         for (let i = 0; i < models.length; i++) {
             const loader = new GLTFLoader();
@@ -412,10 +397,9 @@ var doLogout = function()
         dropButton = document.getElementById('drop-button');
         dropButton.addEventListener('click', onDropButtonClick);
         
-        // Setup QR scanner canvas (uses XR-rendered frame, no extra camera stream)
+        // Setup QR scanner canvas (reads from XR camera via preserveDrawingBuffer)
         qrCanvas = document.getElementById('qr-canvas');
         qrContext = qrCanvas.getContext('2d', { willReadFrequently: true });
-        qrVideo = document.getElementById('qr-video');
         
         // Handle window resize to fix glitchy rendering
         window.addEventListener('resize', onWindowResize, false);
@@ -606,8 +590,6 @@ var doLogout = function()
             qrScanInProgress = false;
             return;
         }
-        // Skip canvas scans if video scanner is running; let video handle continuous scanning
-        if (qrScannerReady || qrScannerStarting) return;
         if (qrScanInProgress) return;
         qrScanInProgress = true;
 
@@ -632,22 +614,6 @@ var doLogout = function()
 
             // Copy current XR frame (camera + virtual) to 2D context at reduced size
             qrContext.drawImage(canvas, 0, 0, targetWidth, targetHeight);
-
-            // Quick luminance sample to detect empty/transparent frames (debug aid)
-            const sample = qrContext.getImageData(0, 0, Math.min(32, targetWidth), Math.min(32, targetHeight)).data;
-            let sum = 0;
-            for (let i = 0; i < sample.length; i += 4) {
-                sum += sample[i] + sample[i + 1] + sample[i + 2];
-            }
-            if (sum < 1000) {
-                console.warn('QR scan skipped: frame appears empty');
-                qrScanInProgress = false;
-                // Try to start dedicated video scanner once if canvas appears empty
-                if (!qrScannerFailed && !qrScannerReady && !qrScannerStarting) {
-                    startQRVideoScannerWithTimeout();
-                }
-                return;
-            }
 
             // Hand canvas directly to Nimiq scanner to avoid ImageData type issues
             QrScanner.scanImage(qrCanvas, { returnDetailedScanResult: true, alsoTryInverted: true })
@@ -825,10 +791,6 @@ var doLogout = function()
     }
 
     function onSessionEnded() {
-        if (qrScanner) {
-            try { qrScanner.stop(); } catch (e) {}
-            qrScannerReady = false;
-        }
         window.location.reload();
     }
 
