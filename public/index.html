@@ -213,7 +213,6 @@ var doLogout = function()
 
     <canvas id="canvas"></canvas>
     <canvas id="qr-canvas" style="display:none;"></canvas>
-    <video id="qr-video" autoplay muted playsinline style="display:none;"></video>
     <div class="navbar">
         <img class="button-image" id="item0" src="pngs/armchair.png" />
         <img class="button-image" id="item1" src="pngs/lounger.png" />
@@ -244,14 +243,9 @@ var doLogout = function()
     let xrSessionStarted = false; // Track if XR session has started
     let geoWatchId = null; // Store GPS watch ID so we can stop it after XR starts
     
-    // QR code scanning state
+    // QR code scanning state (canvas-based only; avoids second camera stream)
     let qrCanvas = null;
     let qrContext = null;
-    let qrVideo = null;
-    let qrScanner = null;
-    let qrScannerReady = false;
-    let qrScannerStarting = false;
-    let qrScannerFailed = false;
     let lastQRScanTime = 0;
     let qrScanInterval = 1500; // ms between scans
     let qrScanInProgress = false; // Prevent concurrent scans
@@ -405,7 +399,6 @@ var doLogout = function()
         // Setup QR scanner canvas (uses XR-rendered frame, no extra camera stream)
         qrCanvas = document.getElementById('qr-canvas');
         qrContext = qrCanvas.getContext('2d', { willReadFrequently: true });
-        qrVideo = document.getElementById('qr-video');
         
         // Handle window resize to fix glitchy rendering
         window.addEventListener('resize', onWindowResize, false);
@@ -525,58 +518,11 @@ var doLogout = function()
         }
     }
 
-    async function startQRVideoScanner() {
-        if (!xrSessionStarted) return;
-        if (qrScannerReady || qrScannerStarting || qrScannerFailed) return;
-        if (!qrVideo) {
-            qrVideo = document.getElementById('qr-video');
-        }
-        if (!qrVideo) {
-            console.warn('QR video element missing');
-            qrScannerFailed = true;
-            return;
-        }
-
-        qrScannerStarting = true;
-        try {
-            qrScanner = new QrScanner(
-                qrVideo,
-                (result) => {
-                    if (result && result.data) {
-                        console.log('QR code detected (video):', result.data);
-                        showToast(`QR: ${result.data}`);
-                        processQRCode(result.data);
-                    }
-                },
-                {
-                    preferredCamera: 'environment',
-                    maxScansPerSecond: 8,
-                    returnDetailedScanResult: true,
-                    highlightCodeOutline: false,
-                    highlightScanRegion: false,
-                    alsoTryInverted: true,
-                }
-            );
-
-            await qrScanner.start();
-            qrScannerReady = true;
-            console.log('QR video scanner started');
-        } catch (e) {
-            qrScannerFailed = true;
-            console.warn('QR video scanner failed to start:', e);
-            showToast('QR scanner unavailable (camera busy)');
-        } finally {
-            qrScannerStarting = false;
-        }
-    }
-
     function scanForQRCode() {
         if (!xrSessionStarted) {
             qrScanInProgress = false;
             return;
         }
-        // If video-based scanner is running, skip canvas fallback
-        if (qrScannerReady || qrScannerStarting) return;
         if (qrScanInProgress) return;
         qrScanInProgress = true;
 
@@ -782,24 +728,14 @@ var doLogout = function()
 
         renderer.render(scene, camera);
 
-        // Prefer dedicated video scanner; fall back to XR canvas if video fails
-        if (xrSessionStarted) {
-            if (!qrScannerReady && !qrScannerStarting && !qrScannerFailed) {
-                startQRVideoScanner();
-            }
-
-            if (timestamp - lastQRScanTime > qrScanInterval) {
-                lastQRScanTime = timestamp;
-                scanForQRCode();
-            }
+        // Passive QR scan from XR canvas once XR session is running
+        if (xrSessionStarted && timestamp - lastQRScanTime > qrScanInterval) {
+            lastQRScanTime = timestamp;
+            scanForQRCode();
         }
     }
 
     function onSessionEnded() {
-        if (qrScanner) {
-            try { qrScanner.stop(); } catch (e) {}
-            qrScannerReady = false;
-        }
         window.location.reload();
     }
 
