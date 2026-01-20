@@ -213,7 +213,6 @@ var doLogout = function()
 
     <canvas id="canvas"></canvas>
     <canvas id="qr-canvas" style="display:none;"></canvas>
-    <video id="qr-video" autoplay muted playsinline style="display:none;"></video>
     <div class="navbar">
         <img class="button-image" id="item0" src="pngs/armchair.png" />
         <img class="button-image" id="item1" src="pngs/lounger.png" />
@@ -247,10 +246,8 @@ var doLogout = function()
     // QR code scanning state
     let qrCanvas = null;
     let qrContext = null;
-    let qrVideo = null;
-    let qrScanner = null;
-    let qrScannerReady = false;
-    let qrScannerStarting = false;
+    let lastQRScanTime = 0;
+    let qrScanInterval = 1500; // ms between scans
     let qrScanInProgress = false; // Prevent concurrent scans
     
     // Visual place recognition state
@@ -399,10 +396,9 @@ var doLogout = function()
         dropButton = document.getElementById('drop-button');
         dropButton.addEventListener('click', onDropButtonClick);
         
-        // Setup QR scanner canvas
+        // Setup QR scanner canvas (uses XR-rendered frame, no extra camera stream)
         qrCanvas = document.getElementById('qr-canvas');
         qrContext = qrCanvas.getContext('2d');
-        qrVideo = document.getElementById('qr-video');
         
         // Handle window resize to fix glitchy rendering
         window.addEventListener('resize', onWindowResize, false);
@@ -522,42 +518,51 @@ var doLogout = function()
         }
     }
 
-    async function initQRScanner() {
-        if (qrScannerReady || qrScannerStarting) return;
-        qrScannerStarting = true;
+    function scanForQRCode() {
+        if (qrScanInProgress) return;
+        qrScanInProgress = true;
 
         try {
-            if (!qrVideo) qrVideo = document.getElementById('qr-video');
-            if (!qrVideo) {
-                console.warn('QR scanner: video element missing');
+            if (!qrCanvas || !qrContext || !renderer) {
+                qrScanInProgress = false;
                 return;
             }
 
-            qrScanner = new QrScanner(
-                qrVideo,
-                (result) => {
+            const canvas = renderer.domElement;
+            if (!canvas || !canvas.width || !canvas.height) {
+                qrScanInProgress = false;
+                return;
+            }
+
+            // Resize QR canvas to match current render size
+            qrCanvas.width = canvas.width;
+            qrCanvas.height = canvas.height;
+
+            // Copy current XR frame (camera + virtual) to 2D context
+            qrContext.drawImage(canvas, 0, 0, qrCanvas.width, qrCanvas.height);
+
+            // Read pixel data and hand to Nimiq QR scanner (runs in its own worker)
+            const imageData = qrContext.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+
+            QrScanner.scanImage(imageData, { returnDetailedScanResult: true })
+                .then((result) => {
                     if (result && result.data) {
                         console.log('QR code detected:', result.data);
                         showToast(`QR: ${result.data}`);
                         processQRCode(result.data);
                     }
-                },
-                {
-                    returnDetailedScanResult: true,
-                    highlightScanRegion: false,
-                    highlightCodeOutline: false,
-                    maxScansPerSecond: 8 // keep CPU reasonable
-                }
-            );
-
-            await qrScanner.start();
-            qrScannerReady = true;
-            console.log('QR scanner started');
+                })
+                .catch((err) => {
+                    if (!err?.message || !err.message.includes('No QR code found')) {
+                        console.warn('QR scan error:', err?.message || err);
+                    }
+                })
+                .finally(() => {
+                    qrScanInProgress = false;
+                });
         } catch (e) {
-            console.warn('QR scanner failed to start:', e);
-            showToast('QR scanner unavailable');
-        } finally {
-            qrScannerStarting = false;
+            console.warn('QR scan error:', e);
+            qrScanInProgress = false;
         }
     }
 
@@ -678,9 +683,10 @@ var doLogout = function()
             reticle.position.copy(reticlePos);
             reticle.visible = true;
             
-            // Ensure QR scanner is started after AR session begins (camera permission already granted)
-            if (!qrScannerReady && !qrScannerStarting) {
-                initQRScanner();
+            // Passive QR scan from XR canvas (no extra camera stream)
+            if (timestamp - lastQRScanTime > qrScanInterval) {
+                lastQRScanTime = timestamp;
+                scanForQRCode();
             }
         }
 
@@ -712,9 +718,6 @@ var doLogout = function()
     }
 
     function onSessionEnded() {
-        if (qrScanner) {
-            try { qrScanner.stop(); } catch (e) {}
-        }
         window.location.reload();
     }
 
