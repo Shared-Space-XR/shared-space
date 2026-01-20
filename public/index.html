@@ -1307,15 +1307,16 @@ var doLogout = function()
                 // Recalculate all dropped objects' GPS coordinates
                 recalibrateAllObjects(oldOrigin, geoOrigin);
                 
-                showToast(`GPS calibrated: ${geoOrigin.lat.toFixed(6)}, ${geoOrigin.lon.toFixed(6)}`);
-                updateHUD();
+                // Close calibration modal first
                 stopGPSCalibration();
-            } else {
-                showToast('QR code missing GPS data (need lat, lon, alt)');
-            }
+                
+                // Show confirmation with clear indication this came from QR code
+                showToast(`✓ GPS calibrated from QR code\n${geoOrigin.lat.toFixed(6)}, ${geoOrigin.lon.toFixed(6)}`);
+                updateHUD();\n            } else {
+                showToast('⚠ QR code missing GPS data (need lat, lon, alt)');\n            }
         } catch (e) {
             console.warn('Invalid QR data for calibration:', e);
-            showToast('Invalid GPS QR code format');
+            showToast('⚠ Invalid GPS QR code format');
         }
     }
     
