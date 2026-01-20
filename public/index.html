@@ -526,6 +526,7 @@ var doLogout = function()
     }
 
     async function startQRVideoScanner() {
+        if (!xrSessionStarted) return;
         if (qrScannerReady || qrScannerStarting || qrScannerFailed) return;
         if (!qrVideo) {
             qrVideo = document.getElementById('qr-video');
@@ -570,6 +571,10 @@ var doLogout = function()
     }
 
     function scanForQRCode() {
+        if (!xrSessionStarted) {
+            qrScanInProgress = false;
+            return;
+        }
         // If video-based scanner is running, skip canvas fallback
         if (qrScannerReady || qrScannerStarting) return;
         if (qrScanInProgress) return;
@@ -778,13 +783,15 @@ var doLogout = function()
         renderer.render(scene, camera);
 
         // Prefer dedicated video scanner; fall back to XR canvas if video fails
-        if (!qrScannerReady && !qrScannerStarting && !qrScannerFailed) {
-            startQRVideoScanner();
-        }
+        if (xrSessionStarted) {
+            if (!qrScannerReady && !qrScannerStarting && !qrScannerFailed) {
+                startQRVideoScanner();
+            }
 
-        if (timestamp - lastQRScanTime > qrScanInterval) {
-            lastQRScanTime = timestamp;
-            scanForQRCode();
+            if (timestamp - lastQRScanTime > qrScanInterval) {
+                lastQRScanTime = timestamp;
+                scanForQRCode();
+            }
         }
     }
 
