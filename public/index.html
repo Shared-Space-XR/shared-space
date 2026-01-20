@@ -606,8 +606,6 @@ var doLogout = function()
             qrScanInProgress = false;
             return;
         }
-        // If video-based scanner is running or trying, skip canvas fallback
-        if (qrScannerReady || qrScannerStarting) return;
         if (qrScanInProgress) return;
         qrScanInProgress = true;
 
