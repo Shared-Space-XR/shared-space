@@ -79,9 +79,9 @@ app.post("/api/dropObject", isLoggedIn, async function(req,res){
       lat: payload.lat,
       lon: payload.lon,
       alt: payload.alt,
+      floorLevel: payload.floorLevel || null,
       localPos: payload.localPos,
       quaternion: payload.quaternion,
-      cameraSnapshot: payload.cameraSnapshot,
       timestamp: payload.timestamp || Date.now(),
       createdAt: new Date(payload.timestamp || Date.now())
     };
